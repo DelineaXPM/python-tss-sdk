@@ -38,7 +38,7 @@ def test_api_url(server_json):
 
 
 def test_get_secret(server_json):
-    assert ServerSecret.from_json(secret_server(server_json).get_secret(1)).id == 1
+    assert ServerSecret(**secret_server(server_json).get_secret(1)).id == 1
 
 
 def test_get_nonexistent_secret(server_json):

@@ -56,10 +56,6 @@ class ServerSecret:
     last_password_change_attempt: datetime
     fields: dict
 
-    @staticmethod
-    def from_json(s):
-        return ServerSecret(**json.loads(s))
-
     def __init__(self, **kwargs):
         for k, v in to_snake_case(kwargs):
             if k in ["last_heart_beat_check", "last_password_change_attempt"]:

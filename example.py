@@ -11,7 +11,7 @@ if __name__ == "__main__":
     with open("test_server.json") as f:
         secret_server = SecretServerCloud(**json.load(f))
     try:
-        secret = ServerSecret.from_json(secret_server.get_secret(1))
+        secret = ServerSecret(**secret_server.get_secret(1))
         print(
             f"""username: {secret.fields['username'].value}
 password: {secret.fields['password'].value}

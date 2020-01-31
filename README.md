@@ -49,7 +49,7 @@ by the Secret's `slug`.
 ```python
 from thycotic.secrets.dataclasses import Secret
 
-secret = ServerSecret.from_json(secret_server.get_secret(1))
+secret = ServerSecret(**secret_server.get_secret(1))
 
 print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
 ```

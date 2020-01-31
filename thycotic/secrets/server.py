@@ -9,7 +9,7 @@
             <password: str>,
             [api_path_uri: :attr:`SecretServer.API_PATH_URI`,
             [token_path_uri: :attr:`SecretServer.TOKEN_PATH_URI`])
-        secret = Secret.from_json(secret_server.get_secret(1))
+        secret = Secret(**secret_server.get_secret(1))
 
     There is also a variant class for Secret Server Cloud:
         secret_server = SecretServerCloud(
@@ -74,6 +74,17 @@ class SecretServer:
             raise SecretServerAccessError(message, response)
         raise SecretServerError(response)
 
+    def get_file_attachment(self, id, field_id):
+        return self.process(
+            requests.get(
+                f"{self.api_url}/secrets/{id}/fields/",
+                headers=self._add_authorization_header(),
+            )
+        ).content
+
+    def to_dataclass(self, obj, cls):
+        return cls(**json.loads(obj))
+
     @classmethod
     def _get_access_grant(cls, token_url, username, password):
         """Gets an OAuth2 Access Grant by calling the Secret Server REST API
@@ -126,7 +137,7 @@ class SecretServer:
         """Refreshes the OAuth2 Access Grant if it has expired or will in the next
         `seconds_of_drift` seconds.
 
-        :raise :class:`SecretsVaultError` when the server returns anything other
+        :raise :class:`SecretServerError` when the server returns anything other
                than a valid Access Grant"""
 
         if (
@@ -155,16 +166,16 @@ class SecretServer:
             **existing_headers,
         }
 
-    def get_secret(self, id):
-        """Gets a secret
+    def get_secret_json(self, id):
+        """Gets a Secret from Secret Server
 
-        :param secret_path: the path to the secret
-        :type secret_path: str
+        :param id: the id of the secret
+        :type id: int
         :return: a JSON formatted string representation of the secret
         :rtype: str
-        :raise: :class:`SecretsVaultAccessError` when the caller does not have
+        :raise: :class:`SecretServerAccessError` when the caller does not have
                 permission to access the secret
-        :raise: :class:`SecretsVaultError` when the REST API call fails for
+        :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
 
@@ -175,6 +186,38 @@ class SecretServer:
                 f"{self.api_url}/secrets/{id}", headers=self._add_authorization_header()
             )
         ).text
+
+    def get_secret(self, id, fetch_file_attachments=True):
+        """Gets a secret
+
+        :param id: the id of the secret
+        :type id: int
+        :param fetch_file_attachments: whether or not to fetch file attachments
+                                       and replace itemValue with the contents
+                                       for each item (field), automatically
+        :type fetch_file_attachments: bool
+        :return: a ``dict`` representation of the secret
+        :rtype: Dict
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the secret
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason"""
+
+        try:
+            secret = json.loads(self.get_secret_json(id))
+        except json.JSONDecodeError:
+            raise SecretServerError(response)
+
+        if fetch_file_attachments:
+            for item in secret["items"]:
+                if item["fileAttachmentId"]:
+                    item["itemValue"] = self.process(
+                        requests.get(
+                            f"{self.api_url}/secrets/{id}/fields/{item['slug']}",
+                            headers=self._add_authorization_header(),
+                        )
+                    )
+        return secret
 
 
 class SecretServerCloud(SecretServer):
@@ -191,6 +234,4 @@ class SecretServerCloud(SecretServer):
     URL_TEMPLATE = "https://{}.secretservercloud.{}"
 
     def __init__(self, tenant, username, password, tld=DEFAULT_TLD):
-        super().__init__(
-            self.URL_TEMPLATE.format(tenant, tld), username, password
-        )
+        super().__init__(self.URL_TEMPLATE.format(tenant, tld), username, password)
