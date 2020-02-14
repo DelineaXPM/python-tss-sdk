@@ -202,9 +202,10 @@ class SecretServer:
                 permission to access the secret
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason"""
+        response = self.get_secret_json(id)
 
         try:
-            secret = json.loads(self.get_secret_json(id))
+            secret = json.loads(response)
         except json.JSONDecodeError:
             raise SecretServerError(response)
 
