@@ -1,22 +1,15 @@
-""" The Thycotic Secret Server Python SDK API
+""" The Thycotic Secret Server SDK API facilitates access to the Secret Server
+REST API using *OAuth2 Bearer Token* authentication.
 
-    Provides access to the Secret Server REST API using OAuth2 bearer token authentication.
+Example::
 
-    Typical usage:
-        secret_server = SecretServer(
-            <base_url: str>,
-            <username: str>,
-            <password: str>,
-            [api_path_uri: :attr:`SecretServer.API_PATH_URI`,
-            [token_path_uri: :attr:`SecretServer.TOKEN_PATH_URI`])
-        secret = Secret(**secret_server.get_secret(1))
+    secret_server = SecretServer(base_url, username, password)
+    secret = Secret(**secret_server.get_secret(123))
 
-    There is also a variant class for Secret Server Cloud:
-        secret_server = SecretServerCloud(
-            <tenant: str>,
-            <username: str>,
-            <password: str>,
-            [tld: :attr:`SecretServerCloud.DEFAULT_TLD`])"""
+Or, for Secret Server Cloud::
+
+    secret_server = SecretServerCloud(tenant, username, password,
+                                      tld='com')"""
 
 import json
 import requests
@@ -33,19 +26,16 @@ class SecretServerError(Exception):
 
 
 class SecretServerAccessError(SecretServerError):
-    """ An Exception that represents a 40x response"""
+    """ An Exception that represents an access error like a ``403``."""
 
 
 class SecretServer:
-    """ A class that uses bearer token authentication to access the Secret Server
-    REST API.
+    """ A class that uses an *OAuth2 Bearer Token* to access the Secret Server
+    REST API. It uses the :attr:`username` and :attr:`password` to access the
+    Secret Server at :attr:`base_url`.
 
-    Uses the :attr:`username` and :attr:`password` to access the Secret Server
-    at :attr:`base_url`.
-
-    It gets an access_token which it uses to create an HTTP Authorization header
-    which it adds to each REST API call.
-    """
+    It gets an ``access_token`` that it uses to create an *HTTP Authorization
+    Header* which it includes in each REST API call."""
 
     API_PATH_URI = "/api/v1"
     TOKEN_PATH_URI = "/oauth2/token"
@@ -55,7 +45,7 @@ class SecretServer:
         """ Process the response raising an error if the call was unsuccessful
 
         :return: the response if the call was successful
-        :rtype: :class:~requests.Response
+        :rtype: :class:`~requests.Response`
         :raises: :class:`SecretServerAccessError` when the caller does not have
                 access to the secret
         :raises: :class:`SecretsAccessError` when the server responses with any
@@ -87,11 +77,11 @@ class SecretServer:
 
     @classmethod
     def _get_access_grant(cls, token_url, username, password):
-        """Gets an OAuth2 Access Grant by calling the Secret Server REST API
+        """Gets an *OAuth2 Access Grant* by calling the Secret Server REST API
         ``token`` endpoint
 
-        :raise :class:`SecretServerError` when the server returns anything other
-               than a valid Access Grant"""
+        :raise :class:`SecretServerError` when the server returns anything
+                other than a valid Access Grant"""
 
         response = requests.post(
             token_url,
@@ -123,7 +113,7 @@ class SecretServer:
         :param password: The pasword to authenticate with
         :type password: str
         :param api_path_uri: Defaults to ``/api/v1``
-        :type api_path_uri: string
+        :type api_path_uri: str
         :param token_path_uri: Defaults to ``/oauth2/token``
         :type token_path_uri: str"""
 
@@ -134,7 +124,7 @@ class SecretServer:
         self.token_url = f"{base_url}/{token_path_uri.strip('/')}"
 
     def _refresh_access_grant(self, seconds_of_drift=300):
-        """Refreshes the OAuth2 Access Grant if it has expired or will in the next
+        """Refreshes the *OAuth2 Access Grant* if it has expired or will in the next
         `seconds_of_drift` seconds.
 
         :raise :class:`SecretServerError` when the server returns anything other
@@ -159,7 +149,7 @@ class SecretServer:
         :param existing_headers: a ``dict`` containing the existing headers
         :return: a ``dict`` containing the `existing_headers` and the
                 `Authorization` header
-        :rtype: dict"""
+        :rtype: ``dict``"""
 
         return {
             "Authorization": f"Bearer {self.access_grant['access_token']}",
@@ -172,7 +162,7 @@ class SecretServer:
         :param id: the id of the secret
         :type id: int
         :return: a JSON formatted string representation of the secret
-        :rtype: str
+        :rtype: ``str``
         :raise: :class:`SecretServerAccessError` when the caller does not have
                 permission to access the secret
         :raise: :class:`SecretServerError` when the REST API call fails for
@@ -197,7 +187,7 @@ class SecretServer:
                                        for each item (field), automatically
         :type fetch_file_attachments: bool
         :return: a ``dict`` representation of the secret
-        :rtype: Dict
+        :rtype: ``dict``
         :raise: :class:`SecretServerAccessError` when the caller does not have
                 permission to access the secret
         :raise: :class:`SecretServerError` when the REST API call fails for
