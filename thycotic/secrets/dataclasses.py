@@ -5,6 +5,8 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 
 # Based on https://gist.github.com/jaytaylor/3660565
+
+
 def to_snake_case(camel_case_dict):
     """ Transform to snake case
 
@@ -60,7 +62,7 @@ class ServerSecret:
         for k, v in to_snake_case(kwargs):
             if k in ["last_heart_beat_check", "last_password_change_attempt"]:
                 # @dataclass does not marshal timestamps into datetimes automatically
-                v = datetime.strptime(v, "%Y-%m-%dT%H:%M:%S")
+                v = datetime.fromisoformat(v)
             setattr(self, k, v)
         self.fields = {
             item["slug"]: ServerSecret.Field(**item) for item in kwargs["items"]
