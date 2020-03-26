@@ -58,11 +58,18 @@ class ServerSecret:
     last_password_change_attempt: datetime
     fields: dict
 
+    DEFAULT_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
     def __init__(self, **kwargs):
+        # The REST API returns attributes with camelCase names which we replace
+        # with snake_case per Python conventions
+        datetime_format = self.DEFAULT_DATETIME_FORMAT
+        if "datetime_format" in kwargs:
+            datetime_format = kwargs["datetime_format"]
         for k, v in to_snake_case(kwargs):
             if k in ["last_heart_beat_check", "last_password_change_attempt"]:
                 # @dataclass does not marshal timestamps into datetimes automatically
-                v = datetime.fromisoformat(v)
+                v = datetime.strptime(v, datetime_format)
             setattr(self, k, v)
         self.fields = {
             item["slug"]: ServerSecret.Field(**item) for item in kwargs["items"]
