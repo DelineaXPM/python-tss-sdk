@@ -15,9 +15,9 @@ setuptools.setup(
     install_requires=["requests>=2.12.5"],
     packages=setuptools.find_packages(),
     classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: Apache Software License",
         "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
     ],
     python_requires=">=3.6",
 )
