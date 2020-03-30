@@ -5,8 +5,8 @@ from thycotic.secrets.server import (
     SecretServerCloud,
     SecretServerAccessError,
     SecretServerError,
+    ServerSecret,
 )
-from thycotic.secrets.dataclasses import ServerSecret
 
 
 def test_bad_url(server_json):

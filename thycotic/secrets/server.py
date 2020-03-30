@@ -3,18 +3,93 @@ REST API using *OAuth2 Bearer Token* authentication.
 
 Example::
 
+    # connect to Secret Server
     secret_server = SecretServer(base_url, username, password)
-    secret = Secret(**secret_server.get_secret(123))
-
-Or, for Secret Server Cloud::
-
+    # or, for Secret Server Cloud
     secret_server = SecretServerCloud(tenant, username, password,
-                                      tld='com')"""
+                                      tld='com')
+
+    # to get the secret as a ``dict``
+    secret = secret_server.get_secret(123)
+    # or, to use the dataclass
+    secret = Secret(**secret_server.get_secret(123))"""
 
 import json
+import re
 import requests
 
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta
+
+
+@dataclass
+class ServerSecret:
+    # Based on https://gist.github.com/jaytaylor/3660565
+    @staticmethod
+    def snake_case(camel_cased):
+        """ Transform to snake case
+
+        Transforms the keys of the given map from camelCase to snake_case.
+        """
+        return [
+            (
+                re.compile("([a-z0-9])([A-Z])")
+                .sub(r"\1_\2", re.compile(r"(.)([A-Z][a-z]+)").sub(r"\1_\2", k))
+                .lower(),
+                v,
+            )
+            for (k, v) in camel_cased.items()
+        ]
+
+    @dataclass
+    class Field:
+        item_id: int
+        field_id: int
+        file_attachment_id: int
+        field_description: str
+        field_name: str
+        filename: str
+        value: str
+        slug: str
+
+        def __init__(self, **kwargs):
+            # The REST API returns attributes with camelCase names which we
+            # replace with snake_case per Python conventions
+            for k, v in ServerSecret.snake_case(kwargs):
+                if k == "item_value":
+                    k = "value"
+                setattr(self, k, v)
+
+    id: int
+    folder_id: int
+    secret_template_id: int
+    site_id: int
+    active: bool
+    checked_out: bool
+    check_out_enabled: bool
+    name: str
+    secret_template_name: str
+    last_heart_beat_status: str
+    last_heart_beat_check: datetime
+    last_password_change_attempt: datetime
+    fields: dict
+
+    DEFAULT_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+    def __init__(self, **kwargs):
+        # The REST API returns attributes with camelCase names which we replace
+        # with snake_case per Python conventions
+        datetime_format = self.DEFAULT_DATETIME_FORMAT
+        if "datetime_format" in kwargs:
+            datetime_format = kwargs["datetime_format"]
+        for k, v in self.snake_case(kwargs):
+            if k in ["last_heart_beat_check", "last_password_change_attempt"]:
+                # @dataclass does not marshal timestamps into datetimes automatically
+                v = datetime.strptime(v, datetime_format)
+            setattr(self, k, v)
+        self.fields = {
+            item["slug"]: ServerSecret.Field(**item) for item in kwargs["items"]
+        }
 
 
 class SecretServerError(Exception):
