@@ -47,7 +47,7 @@ a subset of the Secret's attributes and a dictionary of all the fields keyed
 by the Secret's `slug`.
 
 ```python
-from thycotic.secrets.dataclasses import Secret
+from thycotic.secrets.dataclasses import ServerSecret
 
 secret = ServerSecret(**secret_server.get_secret(1))
 
