@@ -85,6 +85,7 @@ class ServerSecret:
         for k, v in self.snake_case(kwargs):
             if k in ["last_heart_beat_check", "last_password_change_attempt"]:
                 # @dataclass does not marshal timestamps into datetimes automatically
+                v = re.sub("\.[0-9]+$", "", v)
                 v = datetime.strptime(v, datetime_format)
             setattr(self, k, v)
         self.fields = {
