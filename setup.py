@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="python-tss-sdk",
-    version="0.0.4",
+    version="0.0.5",
     author="Adam Migus",
     author_email="adam@migus.org",
     description="The Thycotic Secret Server Python SDK",
