@@ -20,4 +20,4 @@ template: {secret.secret_template_name}"""
     except SecretServerAccessError as error:
         print(error.message)
     except SecretServerError as error:
-        print(e.response.text)
+        print(error.response.text)
