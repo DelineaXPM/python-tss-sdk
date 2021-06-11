@@ -135,6 +135,14 @@ class Authorizer(ABC):
         )
 
 
+class AccessTokenAuthorizer(Authorizer):
+    def get_access_token(self):
+        return self.access_token
+
+    def __init__(self, access_token):
+        self.access_token = access_token
+
+
 class PasswordGrantAuthorizer(Authorizer):
     """Allows the the use of a username and password to be used to authorize
     REST API calls.

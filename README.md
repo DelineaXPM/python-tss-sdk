@@ -32,10 +32,11 @@ The SDK API also contains a `Secret` `@dataclass` containing a subset of the Sec
 
 ## Secret Server
 
-There are two ways in which you can authorize the `SecretServer` class to fetch secrets.
+There are three ways in which you can authorize the `SecretServer` class to fetch secrets.
 
 - Password Authorization (with `PasswordGrantAuthorizer`)
 - Domain Authorization (with `DomainPasswordGrantAuthorizer`)
+- Access Token Authorization (with `AccessTokenAuthorizer`)
 
 ### Usage
 
@@ -57,6 +58,16 @@ To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires
 from thycotic.secrets.server import DomainPasswordGrantAuthorizer
 
 authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", "myusername", "mydomain", "mypassword")
+```
+
+#### Access Token Authorization
+
+If you already have an `access_token`, you can pass directly via the `AccessTokenAuthorizer`.
+
+```python
+from thycotic.secrets.server import AccessTokenAuthorizer
+
+authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
 ```
 
 ### Initializing SecretServer

@@ -1,6 +1,7 @@
 import pytest
 
 from thycotic.secrets.server import (
+    AccessTokenAuthorizer,
     SecretServer,
     SecretServerV1,
     SecretServerAccessError,
@@ -39,6 +40,13 @@ def test_api_url(secret_server, server_json):
         secret_server.api_url
         == f"https://{server_json['tenant']}.secretservercloud.com/api/v1"
     )
+
+
+def test_access_token_authorizer(server_json, authorizer):
+    assert SecretServerV1(
+        f"https://{server_json['tenant']}.secretservercloud.com/",
+        AccessTokenAuthorizer(authorizer.get_access_token()),
+    ).get_secret(1)["id"] == 1
 
 
 def test_server_secret(secret_server):
