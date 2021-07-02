@@ -1,24 +1,27 @@
-import json
+import os
 import pytest
 
 from thycotic.secrets.server import PasswordGrantAuthorizer, SecretServerCloud
 
 
 @pytest.fixture
-def server_json():
-    with open("test_server.json") as f:
-        return json.load(f)
+def env_vars(monkeypatch):
+    return {
+        "username": os.getenv("tss_username"),
+        "password": os.getenv("tss_password"),
+        "tenant": os.getenv("tss_tenant"),
+    }
 
 
 @pytest.fixture
-def secret_server(server_json):
-    return SecretServerCloud(**server_json)
+def secret_server(env_vars):
+    return SecretServerCloud(**env_vars)
 
 
 @pytest.fixture
-def authorizer(server_json):
+def authorizer(env_vars):
     return PasswordGrantAuthorizer(
-        f"https://{server_json['tenant']}.secretservercloud.com/oauth2/token",
-        server_json["username"],
-        server_json["password"],
+        f"https://{env_vars['tenant']}.secretservercloud.com/oauth2/token",
+        env_vars["username"],
+        env_vars["password"],
     )
