@@ -3,36 +3,30 @@ name: Run Tests
 on: [pull_request]
 
 jobs:
-  testing:
+  
+  build:
     runs-on: ubuntu-latest
+    environment: testing
     strategy:
-      matrix: 
-        python-version: [3.6, 3.7, 3.8, 3.9]
-        
+      matrix:
+        python: [3.6, 3.7, 3.8, 3.9]
+
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v2
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python }}
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
+      - name: Install Tox and any other packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install tox
 
-    - name: Cache pip
-      uses: actions/cache@v2
-      with:
-        # This path is specific to Ubuntu
-        path: ~/.cache/pip
-        # Look to see if there is a cache hit for the corresponding requirements file
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-          ${{ runner.os }}-
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: Run pytest
-      run: |
-        pytest
+      - name: Run Tox
+        # Run tox using the version of Python in `PATH`
+        run: tox -e py
+        env:
+          tss_username: ${{ secrets.TSS_USERNAME }}
+          tss_password: ${{ secrets.TSS_PASSWORD }}
+          tss_tenant: ${{ secrets.TSS_TENANT }}
