@@ -94,40 +94,42 @@ print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['p
 
 The SDK requires [Python 3.6](https://www.python.org/downloads/) or higher, and the [Requests](https://2.python-requests.org/en/master/) library.
 
-First, ensure Python 3.6 is in `$PATH` then run:
+First, ensure Python is in `$PATH` then run:
 
 ```shell
+# Clone the repo
 git clone https://github.com/thycotic/python-tss-sdk
 cd python-tss-sdk
+
+# Create a virtual environment
 python -m venv venv
 . venv/bin/activate
+
+# Install dependencies 
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Both `example.py` and the unit tests pull the settings from a JSON file.
-
-```python
-with open('server_config.json') as f:
-    config = json.load(f)
-```
-
-They also assume that the user associated with the specified `username` and `password` can read the secret with ID `1`, and that the Secret itself contains `username` and `password` fields.
-
-Create `server_config.json`:
-
-```json
-{
-  "username": "app_user",
-  "password": "Passw0rd!",
-  "tenant": "mytenant"
-}
-```
-
-Finally, run `pytest`, then build the package:
+Valid credentials are required to run the unit tests. The credentials should be stored in environment variables:
 
 ```shell
-pytest
+export tss_username=myusername
+export tss_password=mysecretpassword
+export tss_tenant=mytenant
+```
 
-# Build
+The tests assume that the user associated with the specified `tss_username` and `tss_password` can read the secret with ID `1`, and that the Secret itself contains `username` and `password` fields.
+
+> Note: The secret ID can be changed manually in `test_server.py` to a secret ID that the user can access.
+
+To run the tests with `tox`:
+
+```shell
+tox
+```
+
+To build the package:
+
+```shell
 flit build
 ```
