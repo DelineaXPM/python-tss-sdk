@@ -5,7 +5,7 @@ from thycotic.secrets.server import PasswordGrantAuthorizer, SecretServerCloud
 
 
 @pytest.fixture
-def env_vars(monkeypatch):
+def env_vars():
     return {
         "username": os.getenv("tss_username"),
         "password": os.getenv("tss_password"),
