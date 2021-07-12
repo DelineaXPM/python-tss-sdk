@@ -188,8 +188,8 @@ class PasswordGrantAuthorizer(Authorizer):
             )
             self.access_grant_refreshed = datetime.now()
 
-    def __init__(self, token_url, username, password):
-        self.token_url = token_url
+    def __init__(self, base_url, username, password, token_path_uri=TOKEN_PATH_URI):
+        self.token_url = base_url.rstrip("/") + "/" + token_path_uri.strip("/")
         self.grant_request = {
             "username": username,
             "password": password,
@@ -204,14 +204,16 @@ class PasswordGrantAuthorizer(Authorizer):
 class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
     """Allows domain access to be used to authorize REST API calls."""
 
-    def __init__(self, token_url, username, domain, password):
-        self.token_url = token_url
-        self.grant_request = {
-            "username": username,
-            "password": password,
-            "domain": domain,
-            "grant_type": "password",
-        }
+    def __init__(
+        self,
+        base_url,
+        username,
+        domain,
+        password,
+        token_path_uri=PasswordGrantAuthorizer.TOKEN_PATH_URI,
+    ):
+        super().__init__(base_url, username, password, token_path_uri=token_path_uri)
+        self.grant_request["domain"] = domain
 
 
 class SecretServerV1:
@@ -374,10 +376,7 @@ class SecretServerCloud(SecretServerV1):
         super().__init__(
             self.URL_TEMPLATE.format(tenant, tld),
             PasswordGrantAuthorizer(
-                self.URL_TEMPLATE.format(tenant, tld)
-                + PasswordGrantAuthorizer.TOKEN_PATH_URI,
-                username,
-                password,
+                self.URL_TEMPLATE.format(tenant, tld), username, password,
             ),
         )
 

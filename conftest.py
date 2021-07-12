@@ -21,7 +21,7 @@ def secret_server(env_vars):
 @pytest.fixture
 def authorizer(env_vars):
     return PasswordGrantAuthorizer(
-        f"https://{env_vars['tenant']}.secretservercloud.com/oauth2/token",
+        f"https://{env_vars['tenant']}.secretservercloud.com",
         env_vars["username"],
         env_vars["password"],
     )
