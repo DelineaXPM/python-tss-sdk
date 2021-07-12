@@ -216,7 +216,7 @@ class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
         self.grant_request["domain"] = domain
 
 
-class SecretServerV1:
+class SecretServer:
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
     REST API. It uses the and `Authorizer` to determine the Authorization
     method required to access the Secret Server at :attr:`base_url`.
@@ -326,7 +326,7 @@ class SecretServerV1:
         return secret
 
 
-class SecretServer(SecretServerV1):
+class SecretServerV0(SecretServer):
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
     REST API. It uses the :attr:`username` and :attr:`password` to access the
     Secret Server at :attr:`base_url`.
@@ -342,7 +342,7 @@ class SecretServer(SecretServerV1):
         base_url,
         username,
         password,
-        api_path_uri=SecretServerV1.API_PATH_URI,
+        api_path_uri=SecretServer.API_PATH_URI,
         token_path_uri=PasswordGrantAuthorizer.TOKEN_PATH_URI,
     ):
         super().__init__(
@@ -353,13 +353,8 @@ class SecretServer(SecretServerV1):
             api_path_uri,
         )
 
-    warnings.warn(
-        "The current implementation of this class will be changed in v0.1.0 to that of SecretServerV1",
-        PendingDeprecationWarning,
-    )
 
-
-class SecretServerCloud(SecretServerV1):
+class SecretServerCloud(SecretServer):
     """A class that uses bearer token authentication to access the Secret Server
     Cloud REST API.
 
@@ -372,12 +367,6 @@ class SecretServerCloud(SecretServerV1):
     DEFAULT_TLD = "com"
     URL_TEMPLATE = "https://{}.secretservercloud.{}"
 
-    def __init__(self, tenant, username, password, tld=DEFAULT_TLD):
-        super().__init__(
-            self.URL_TEMPLATE.format(tenant, tld),
-            PasswordGrantAuthorizer(
-                self.URL_TEMPLATE.format(tenant, tld), username, password,
-            ),
-        )
+    def __init__(self, tenant, authorizer: Authorizer, tld=DEFAULT_TLD):
+        super().__init__(self.URL_TEMPLATE.format(tenant, tld), authorizer)
 
-    warnings.warn("", PendingDeprecationWarning)

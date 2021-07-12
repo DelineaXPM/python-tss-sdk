@@ -12,12 +12,6 @@ def env_vars():
         "tenant": os.getenv("tss_tenant"),
     }
 
-
-@pytest.fixture
-def secret_server(env_vars):
-    return SecretServerCloud(**env_vars)
-
-
 @pytest.fixture
 def authorizer(env_vars):
     return PasswordGrantAuthorizer(
@@ -25,3 +19,7 @@ def authorizer(env_vars):
         env_vars["username"],
         env_vars["password"],
     )
+
+@pytest.fixture
+def secret_server(env_vars, authorizer):
+    return SecretServerCloud(env_vars['tenant'], authorizer)
