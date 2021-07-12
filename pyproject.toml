@@ -16,7 +16,7 @@ classifiers = [
 ]
 description-file = "README.md"
 requires = [
-    "dataclasses",
+    "dataclasses >= 0.6",
     "requests >= 2.12.5"
 ]
 requires-python=">=3.6"
