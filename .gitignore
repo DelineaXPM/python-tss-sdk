@@ -131,6 +131,3 @@ dmypy.json
 # Editor Configs
 .vscode/
 .idea/
-
-# Test Config
-test_server.json
