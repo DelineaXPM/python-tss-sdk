@@ -4,7 +4,7 @@ from thycotic.secrets.server import (
     AccessTokenAuthorizer,
     SecretServer,
     SecretServerV1,
-    SecretServerAccessError,
+    SecretServerClientError,
     SecretServerError,
     ServerSecret,
 )
@@ -54,5 +54,5 @@ def test_server_secret(secret_server):
 
 
 def test_nonexistent_secret(secret_server):
-    with pytest.raises(SecretServerAccessError):
+    with pytest.raises(SecretServerClientError):
         secret_server.get_secret(1000)

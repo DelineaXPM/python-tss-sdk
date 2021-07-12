@@ -103,8 +103,12 @@ class SecretServerError(Exception):
         super().__init__(*args, **kwargs)
 
 
-class SecretServerAccessError(SecretServerError):
-    """An Exception that represents an access error like a ``403``."""
+class SecretServerClientError(SecretServerError):
+    """An Exception that represents a client error i.e. ``400``."""
+
+
+class SecretServerServiceError(SecretServerError):
+    """An Exception that represents a service error i.e. ``500``."""
 
 
 class Authorizer(ABC):
@@ -235,18 +239,17 @@ class SecretServerV1:
         if response.status_code >= 200 and response.status_code < 300:
             return response
         if response.status_code >= 400 and response.status_code < 500:
-            message = "unknown error response"
             try:
                 content = json.loads(response.content)
-            except json.JSONDecodeError:
-                raise SecretServerError(message, response)
-
-            if "message" in content:
-                message = content["message"]
-            elif "error" in content and isinstance(content["error"], str):
-                message = content["error"]
-            raise SecretServerAccessError(message, response)
-        raise SecretServerError(response)
+                if "message" in content:
+                    message = content["message"]
+                elif "error" in content and isinstance(content["error"], str):
+                    message = content["error"]
+            except json.JSONDecodeError as err:
+                message = err.msg
+            raise SecretServerClientError(message, response)
+        else:
+            raise SecretServerServiceError(response)
 
     def headers(self):
         """Returns a dictionary containing HTTP headers."""
