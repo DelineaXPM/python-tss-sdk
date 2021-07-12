@@ -10,7 +10,7 @@ from thycotic.secrets.server import (
 )
 
 
-def test_bad_url(env_vars, authorizer):
+def test_bad_url(env_vars):
     bad_server = SecretServer(
         f"https://{env_vars['tenant']}.secretservercloud.com/nonexistent",
         env_vars["username"],
