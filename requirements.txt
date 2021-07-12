@@ -2,4 +2,5 @@ requests>=2.22.0
 dataclasses>=0.6
 tox
 pytest
+python-dotenv
 flit
