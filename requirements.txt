@@ -1,5 +1,5 @@
-requests==2.22.0
-dataclasses==0.8
+requests>=2.22.0
+dataclasses>=0.6
 tox
 pytest
 flit
