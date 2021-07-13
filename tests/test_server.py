@@ -3,8 +3,8 @@ import pytest
 from thycotic.secrets.server import (
     AccessTokenAuthorizer,
     SecretServer,
-    SecretServerV1,
-    SecretServerAccessError,
+    SecretServerV0,
+    SecretServerClientError,
     SecretServerError,
     ServerSecret,
 )
@@ -13,19 +13,10 @@ from thycotic.secrets.server import (
 def test_bad_url(env_vars, authorizer):
     bad_server = SecretServer(
         f"https://{env_vars['tenant']}.secretservercloud.com/nonexistent",
-        env_vars["username"],
-        env_vars["password"],
+        authorizer,
     )
     with pytest.raises(SecretServerError):
         bad_server.get_secret(1)
-
-
-def test_base_url(env_vars):
-    assert SecretServer(
-        f"https://{env_vars['tenant']}.secretservercloud.com/",
-        env_vars["username"],
-        env_vars["password"],
-    )
 
 
 def test_token_url(env_vars, authorizer):
@@ -43,10 +34,13 @@ def test_api_url(secret_server, env_vars):
 
 
 def test_access_token_authorizer(env_vars, authorizer):
-    assert SecretServerV1(
-        f"https://{env_vars['tenant']}.secretservercloud.com/",
-        AccessTokenAuthorizer(authorizer.get_access_token()),
-    ).get_secret(1)["id"] == 1
+    assert (
+        SecretServer(
+            f"https://{env_vars['tenant']}.secretservercloud.com/",
+            AccessTokenAuthorizer(authorizer.get_access_token()),
+        ).get_secret(1)["id"]
+        == 1
+    )
 
 
 def test_server_secret(secret_server):
@@ -54,5 +48,5 @@ def test_server_secret(secret_server):
 
 
 def test_nonexistent_secret(secret_server):
-    with pytest.raises(SecretServerAccessError):
+    with pytest.raises(SecretServerClientError):
         secret_server.get_secret(1000)

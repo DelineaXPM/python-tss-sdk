@@ -1,27 +1,26 @@
-""" The Thycotic Secret Server SDK API facilitates access to the Secret Server
+"""The Thycotic Secret Server SDK API facilitates access to the Secret Server
 REST API using *OAuth2 Bearer Token* authentication.
 
-Example::
+Example:
 
     # connect to Secret Server
-    secret_server = SecretServer(base_url, username, password)
+    secret_server = SecretServer(base_url, authorizer, api_path_uri='/api/v1')
     # or, for Secret Server Cloud
-    secret_server = SecretServerCloud(tenant, username, password,
-                                      tld='com')
+    secret_server = SecretServerCloud(tenant, username, password, tld='com')
 
     # to get the secret as a ``dict``
     secret = secret_server.get_secret(123)
     # or, to use the dataclass
-    secret = Secret(**secret_server.get_secret(123))"""
+    secret = ServerSecret(**secret_server.get_secret(123))
+"""
 
 import json
 import re
-import warnings
-import requests
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+import requests
 
 
 @dataclass
@@ -87,7 +86,7 @@ class ServerSecret:
         for k, v in self.snake_case(kwargs):
             if k in ["last_heart_beat_check", "last_password_change_attempt"]:
                 # @dataclass does not marshal timestamps into datetimes automatically
-                v = re.sub("\.[0-9]+$", "", v)
+                v = re.sub(r"\.[0-9]+$", "", v)
                 v = datetime.strptime(v, datetime_format)
             setattr(self, k, v)
         self.fields = {
@@ -103,8 +102,12 @@ class SecretServerError(Exception):
         super().__init__(*args, **kwargs)
 
 
-class SecretServerAccessError(SecretServerError):
-    """An Exception that represents an access error like a ``403``."""
+class SecretServerClientError(SecretServerError):
+    """An Exception that represents a client error i.e. ``400``."""
+
+
+class SecretServerServiceError(SecretServerError):
+    """An Exception that represents a service error i.e. ``500``."""
 
 
 class Authorizer(ABC):
@@ -117,7 +120,8 @@ class Authorizer(ABC):
         :param existing_headers: a ``dict`` containing the existing headers
         :return: a ``dict`` containing the `existing_headers` and the
                 `Authorization` header
-        :rtype: ``dict``"""
+        :rtype: ``dict``
+        """
 
         return {
             "Authorization": "Bearer " + bearer_token,
@@ -136,6 +140,10 @@ class Authorizer(ABC):
 
 
 class AccessTokenAuthorizer(Authorizer):
+    """Allows the use of a pre-existing access token to authorize REST API
+    calls.
+    """
+
     def get_access_token(self):
         return self.access_token
 
@@ -144,8 +152,8 @@ class AccessTokenAuthorizer(Authorizer):
 
 
 class PasswordGrantAuthorizer(Authorizer):
-    """Allows the the use of a username and password to be used to authorize
-    REST API calls.
+    """Allows the use of a username and password to be used to authorize REST
+    API calls.
     """
 
     TOKEN_PATH_URI = "/oauth2/token"
@@ -156,7 +164,8 @@ class PasswordGrantAuthorizer(Authorizer):
         ``token`` endpoint
 
         :raise :class:`SecretServerError` when the server returns anything
-                other than a valid Access Grant"""
+                other than a valid Access Grant
+        """
 
         response = requests.post(token_url, grant_request)
 
@@ -170,7 +179,9 @@ class PasswordGrantAuthorizer(Authorizer):
         `seconds_of_drift` seconds.
 
         :raise :class:`SecretServerError` when the server returns anything other
-               than a valid Access Grant"""
+               than a valid Access Grant
+        """
+
         if (
             hasattr(self, "access_grant")
             and self.access_grant_refreshed
@@ -184,8 +195,8 @@ class PasswordGrantAuthorizer(Authorizer):
             )
             self.access_grant_refreshed = datetime.now()
 
-    def __init__(self, token_url, username, password):
-        self.token_url = token_url
+    def __init__(self, base_url, username, password, token_path_uri=TOKEN_PATH_URI):
+        self.token_url = base_url.rstrip("/") + "/" + token_path_uri.strip("/")
         self.grant_request = {
             "username": username,
             "password": password,
@@ -200,17 +211,19 @@ class PasswordGrantAuthorizer(Authorizer):
 class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
     """Allows domain access to be used to authorize REST API calls."""
 
-    def __init__(self, token_url, username, domain, password):
-        self.token_url = token_url
-        self.grant_request = {
-            "username": username,
-            "password": password,
-            "domain": domain,
-            "grant_type": "password",
-        }
+    def __init__(
+        self,
+        base_url,
+        username,
+        domain,
+        password,
+        token_path_uri=PasswordGrantAuthorizer.TOKEN_PATH_URI,
+    ):
+        super().__init__(base_url, username, password, token_path_uri=token_path_uri)
+        self.grant_request["domain"] = domain
 
 
-class SecretServerV1:
+class SecretServer:
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
     REST API. It uses the and `Authorizer` to determine the Authorization
     method required to access the Secret Server at :attr:`base_url`.
@@ -230,23 +243,23 @@ class SecretServerV1:
         :raises: :class:`SecretServerAccessError` when the caller does not have
                 access to the secret
         :raises: :class:`SecretsAccessError` when the server responses with any
-                other error"""
+                other error
+        """
 
         if response.status_code >= 200 and response.status_code < 300:
             return response
         if response.status_code >= 400 and response.status_code < 500:
-            message = "unknown error response"
             try:
                 content = json.loads(response.content)
-            except json.JSONDecodeError:
-                raise SecretServerError(message, response)
-
-            if "message" in content:
-                message = content["message"]
-            elif "error" in content and isinstance(content["error"], str):
-                message = content["error"]
-            raise SecretServerAccessError(message, response)
-        raise SecretServerError(response)
+                if "message" in content:
+                    message = content["message"]
+                elif "error" in content and isinstance(content["error"], str):
+                    message = content["error"]
+            except json.JSONDecodeError as err:
+                message = err.msg
+            raise SecretServerClientError(message, response)
+        else:
+            raise SecretServerServiceError(response)
 
     def headers(self):
         """Returns a dictionary containing HTTP headers."""
@@ -264,7 +277,8 @@ class SecretServerV1:
         :param authorizer: The authorization method to be used
         :type authorizer: Authorizer
         :param api_path_uri: Defaults to ``/api/v1``
-        :type api_path_uri: str"""
+        :type api_path_uri: str
+        """
 
         self.base_url = base_url.rstrip("/")
         self.authorizer = authorizer
@@ -301,7 +315,9 @@ class SecretServerV1:
         :raise: :class:`SecretServerAccessError` when the caller does not have
                 permission to access the secret
         :raise: :class:`SecretServerError` when the REST API call fails for
-                any other reason"""
+                any other reason
+        """
+
         response = self.get_secret_json(id)
 
         try:
@@ -321,7 +337,7 @@ class SecretServerV1:
         return secret
 
 
-class SecretServer(SecretServerV1):
+class SecretServerV0(SecretServer):
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
     REST API. It uses the :attr:`username` and :attr:`password` to access the
     Secret Server at :attr:`base_url`.
@@ -337,7 +353,7 @@ class SecretServer(SecretServerV1):
         base_url,
         username,
         password,
-        api_path_uri=SecretServerV1.API_PATH_URI,
+        api_path_uri=SecretServer.API_PATH_URI,
         token_path_uri=PasswordGrantAuthorizer.TOKEN_PATH_URI,
     ):
         super().__init__(
@@ -348,34 +364,20 @@ class SecretServer(SecretServerV1):
             api_path_uri,
         )
 
-    warnings.warn(
-        "The current implementation of this class will be changed in v0.1.0 to that of SecretServerV1",
-        PendingDeprecationWarning,
-    )
 
-
-class SecretServerCloud(SecretServerV1):
-    """A class that uses bearer token authentication to access the Secret Server
-    Cloud REST API.
+class SecretServerCloud(SecretServer):
+    """A class that uses bearer token authentication to access the Secret
+    Server Cloud REST API.
 
     It uses :attr:`tenant`, :attr:`tld` with :attr:`SERVER_URL_TEMPLATE`,
     to create request URLs.
 
-    It uses the :attr:`username` and :attr:`password` to get an access_token from
-    Secret Server Cloud which it uses to make calls to the REST API."""
+    It uses the :attr:`username` and :attr:`password` to get an access_token
+    from Secret Server Cloud which it uses to make calls to the REST API.
+    """
 
     DEFAULT_TLD = "com"
     URL_TEMPLATE = "https://{}.secretservercloud.{}"
 
-    def __init__(self, tenant, username, password, tld=DEFAULT_TLD):
-        super().__init__(
-            self.URL_TEMPLATE.format(tenant, tld),
-            PasswordGrantAuthorizer(
-                self.URL_TEMPLATE.format(tenant, tld)
-                + PasswordGrantAuthorizer.TOKEN_PATH_URI,
-                username,
-                password,
-            ),
-        )
-
-    warnings.warn("", PendingDeprecationWarning)
+    def __init__(self, tenant, authorizer: Authorizer, tld=DEFAULT_TLD):
+        super().__init__(self.URL_TEMPLATE.format(tenant, tld), authorizer)

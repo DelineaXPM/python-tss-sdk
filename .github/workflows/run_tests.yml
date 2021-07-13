@@ -27,6 +27,6 @@ jobs:
         # Run tox using the version of Python in `PATH`
         run: tox -e py
         env:
-          tss_username: ${{ secrets.TSS_USERNAME }}
-          tss_password: ${{ secrets.TSS_PASSWORD }}
-          tss_tenant: ${{ secrets.TSS_TENANT }}
+          TSS_USERNAME: ${{ secrets.TSS_USERNAME }}
+          TSS_PASSWORD: ${{ secrets.TSS_PASSWORD }}
+          TSS_TENANT: ${{ secrets.TSS_TENANT }}
