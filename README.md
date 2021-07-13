@@ -42,7 +42,7 @@ There are three ways in which you can authorize the `SecretServer` class to fetc
 
 #### Password Authorization
 
-If using traditional `username` and `password` authentication to log in to your Secret Server, you can pass the `PasswordGrantAuthorizer` in into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `token_url`, `username`, and `password`.
+If using traditional `username` and `password` authentication to log in to your Secret Server, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
 
 ```python
 from thycotic.secrets.server import PasswordGrantAuthorizer
@@ -52,7 +52,7 @@ authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", "myusernam
 
 #### Domain Authorization
 
-To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `token_url`, `username`, `domain`, and `password`.
+To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
 
 ```python
 from thycotic.secrets.server import DomainPasswordGrantAuthorizer
@@ -72,14 +72,14 @@ authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
 
 ### Initializing SecretServer
 
-_NOTE: In v0.0.6 `SecretServerV1` replaces `SecretServer`. However, `SecretServer` is still available for backwards compatibility with v0.0.5 and earlier. In version 0.1.0, the current implementation will be deprecated and `SecretServerV1` will become `SecretServer`._
+> NOTE: In v1.0.0 `SecretServer` replaces `SecretServerV1`. However, `SecretServerV0` is available to use instead, for backwards compatibility with v0.0.5 and v0.0.6.
 
-To instantiate the `SecretServerV1` class, it requires a `base_url`, `authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
+To instantiate the `SecretServer` class, it requires a `base_url`, `authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
 
 ```python
-from thycotic.secrets.server import ServerSecretV1
+from thycotic.secrets.server import ServerSecret
 
-secret_server = SecretServerV1("https://hostname/SecretServer", my_authorizer)
+secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
 ```
 
 Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret:
@@ -92,9 +92,9 @@ print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['p
 
 ## Create a Build Environment (optional)
 
-The SDK requires [Python 3.6](https://www.python.org/downloads/) or higher, and the [Requests](https://2.python-requests.org/en/master/) library.
+The SDK requires [Python 3.6](https://www.python.org/downloads/) or higher.
 
-First, ensure Python is in `$PATH` then run:
+First, ensure Python is in `$PATH`, then run:
 
 ```shell
 # Clone the repo
@@ -110,15 +110,15 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Valid credentials are required to run the unit tests. The credentials should be stored in environment variables:
+Valid credentials are required to run the unit tests. The credentials should be stored in environment variables or in a `.env` file:
 
 ```shell
-export tss_username=myusername
-export tss_password=mysecretpassword
-export tss_tenant=mytenant
+export TSS_USERNAME=myusername
+export TSS_PASSWORD=mysecretpassword
+export TSS_TENANT=mytenant
 ```
 
-The tests assume that the user associated with the specified `tss_username` and `tss_password` can read the secret with ID `1`, and that the Secret itself contains `username` and `password` fields.
+The tests assume that the user associated with the specified `TSS_USERNAME` and `TSS_PASSWORD` can read the secret with ID `1`, and that the Secret itself contains `username` and `password` fields.
 
 > Note: The secret ID can be changed manually in `test_server.py` to a secret ID that the user can access.
 
@@ -128,7 +128,7 @@ To run the tests with `tox`:
 tox
 ```
 
-To build the package:
+To build the package, use [Flit](https://flit.readthedocs.io/en/latest/):
 
 ```shell
 flit build
