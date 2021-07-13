@@ -1,27 +1,26 @@
-""" The Thycotic Secret Server SDK API facilitates access to the Secret Server
+"""The Thycotic Secret Server SDK API facilitates access to the Secret Server
 REST API using *OAuth2 Bearer Token* authentication.
 
-Example::
+Example:
 
     # connect to Secret Server
-    secret_server = SecretServer(base_url, username, password)
+    secret_server = SecretServer(base_url, authorizer, api_path_uri='/api/v1')
     # or, for Secret Server Cloud
-    secret_server = SecretServerCloud(tenant, username, password,
-                                      tld='com')
+    secret_server = SecretServerCloud(tenant, username, password, tld='com')
 
     # to get the secret as a ``dict``
     secret = secret_server.get_secret(123)
     # or, to use the dataclass
-    secret = Secret(**secret_server.get_secret(123))"""
+    secret = ServerSecret(**secret_server.get_secret(123))
+"""
 
 import json
 import re
-import warnings
-import requests
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+import requests
 
 
 @dataclass
@@ -121,7 +120,8 @@ class Authorizer(ABC):
         :param existing_headers: a ``dict`` containing the existing headers
         :return: a ``dict`` containing the `existing_headers` and the
                 `Authorization` header
-        :rtype: ``dict``"""
+        :rtype: ``dict``
+        """
 
         return {
             "Authorization": "Bearer " + bearer_token,
@@ -140,6 +140,10 @@ class Authorizer(ABC):
 
 
 class AccessTokenAuthorizer(Authorizer):
+    """Allows the use of a pre-existing access token to authorize REST API
+    calls.
+    """
+
     def get_access_token(self):
         return self.access_token
 
@@ -148,8 +152,8 @@ class AccessTokenAuthorizer(Authorizer):
 
 
 class PasswordGrantAuthorizer(Authorizer):
-    """Allows the the use of a username and password to be used to authorize
-    REST API calls.
+    """Allows the use of a username and password to be used to authorize REST
+    API calls.
     """
 
     TOKEN_PATH_URI = "/oauth2/token"
@@ -160,7 +164,8 @@ class PasswordGrantAuthorizer(Authorizer):
         ``token`` endpoint
 
         :raise :class:`SecretServerError` when the server returns anything
-                other than a valid Access Grant"""
+                other than a valid Access Grant
+        """
 
         response = requests.post(token_url, grant_request)
 
@@ -174,7 +179,9 @@ class PasswordGrantAuthorizer(Authorizer):
         `seconds_of_drift` seconds.
 
         :raise :class:`SecretServerError` when the server returns anything other
-               than a valid Access Grant"""
+               than a valid Access Grant
+        """
+
         if (
             hasattr(self, "access_grant")
             and self.access_grant_refreshed
@@ -236,7 +243,8 @@ class SecretServer:
         :raises: :class:`SecretServerAccessError` when the caller does not have
                 access to the secret
         :raises: :class:`SecretsAccessError` when the server responses with any
-                other error"""
+                other error
+        """
 
         if response.status_code >= 200 and response.status_code < 300:
             return response
@@ -269,7 +277,8 @@ class SecretServer:
         :param authorizer: The authorization method to be used
         :type authorizer: Authorizer
         :param api_path_uri: Defaults to ``/api/v1``
-        :type api_path_uri: str"""
+        :type api_path_uri: str
+        """
 
         self.base_url = base_url.rstrip("/")
         self.authorizer = authorizer
@@ -306,7 +315,9 @@ class SecretServer:
         :raise: :class:`SecretServerAccessError` when the caller does not have
                 permission to access the secret
         :raise: :class:`SecretServerError` when the REST API call fails for
-                any other reason"""
+                any other reason
+        """
+
         response = self.get_secret_json(id)
 
         try:
@@ -355,18 +366,18 @@ class SecretServerV0(SecretServer):
 
 
 class SecretServerCloud(SecretServer):
-    """A class that uses bearer token authentication to access the Secret Server
-    Cloud REST API.
+    """A class that uses bearer token authentication to access the Secret
+    Server Cloud REST API.
 
     It uses :attr:`tenant`, :attr:`tld` with :attr:`SERVER_URL_TEMPLATE`,
     to create request URLs.
 
-    It uses the :attr:`username` and :attr:`password` to get an access_token from
-    Secret Server Cloud which it uses to make calls to the REST API."""
+    It uses the :attr:`username` and :attr:`password` to get an access_token
+    from Secret Server Cloud which it uses to make calls to the REST API.
+    """
 
     DEFAULT_TLD = "com"
     URL_TEMPLATE = "https://{}.secretservercloud.{}"
 
     def __init__(self, tenant, authorizer: Authorizer, tld=DEFAULT_TLD):
         super().__init__(self.URL_TEMPLATE.format(tenant, tld), authorizer)
-
