@@ -14,7 +14,7 @@ if __name__ == "__main__":
     }
 
     secret_server = SecretServerCloud(**creds)
-    
+
     try:
         secret = secret_server.get_secret(1)
         print(

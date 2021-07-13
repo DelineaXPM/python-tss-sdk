@@ -5,6 +5,7 @@ from thycotic.secrets.server import PasswordGrantAuthorizer, SecretServerCloud
 
 load_dotenv()
 
+
 @pytest.fixture
 def env_vars():
     return {
@@ -12,6 +13,7 @@ def env_vars():
         "password": os.getenv("TSS_PASSWORD"),
         "tenant": os.getenv("TSS_TENANT"),
     }
+
 
 @pytest.fixture
 def authorizer(env_vars):
@@ -21,6 +23,7 @@ def authorizer(env_vars):
         env_vars["password"],
     )
 
+
 @pytest.fixture
 def secret_server(env_vars, authorizer):
-    return SecretServerCloud(env_vars['tenant'], authorizer)
+    return SecretServerCloud(env_vars["tenant"], authorizer)

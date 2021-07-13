@@ -34,10 +34,13 @@ def test_api_url(secret_server, env_vars):
 
 
 def test_access_token_authorizer(env_vars, authorizer):
-    assert SecretServer(
-        f"https://{env_vars['tenant']}.secretservercloud.com/",
-        AccessTokenAuthorizer(authorizer.get_access_token()),
-    ).get_secret(1)["id"] == 1
+    assert (
+        SecretServer(
+            f"https://{env_vars['tenant']}.secretservercloud.com/",
+            AccessTokenAuthorizer(authorizer.get_access_token()),
+        ).get_secret(1)["id"]
+        == 1
+    )
 
 
 def test_server_secret(secret_server):
