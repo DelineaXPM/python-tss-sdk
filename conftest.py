@@ -8,9 +8,9 @@ load_dotenv()
 @pytest.fixture
 def env_vars():
     return {
-        "username": os.getenv("tss_username"),
-        "password": os.getenv("tss_password"),
-        "tenant": os.getenv("tss_tenant"),
+        "username": os.getenv("TSS_USERNAME"),
+        "password": os.getenv("TSS_PASSWORD"),
+        "tenant": os.getenv("TSS_TENANT"),
     }
 
 @pytest.fixture
