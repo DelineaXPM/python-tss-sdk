@@ -82,12 +82,22 @@ from thycotic.secrets.server import ServerSecret
 secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
 ```
 
-Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret:
+Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
 
 ```python
 secret = secret_server.get_secret(1)
 
 print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
+```
+
+Alternatively, you can use pass the json to `ServerSecret` which returns a `dataclass` object representation of the secret:
+
+```shell
+from thycotic.secrets.server import ServerSecret
+
+secret = ServerSecret(**secret_server.get_secret(1))
+
+username = secret.fields['username'].value
 ```
 
 ## Create a Build Environment (optional)
@@ -105,7 +115,7 @@ cd python-tss-sdk
 python -m venv venv
 . venv/bin/activate
 
-# Install dependencies 
+# Install dependencies
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
