@@ -77,7 +77,7 @@ authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
 To instantiate the `SecretServer` class, it requires a `base_url`, `authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
 
 ```python
-from thycotic.secrets.server import ServerSecret
+from thycotic.secrets.server import SecretServer
 
 secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
 ```
