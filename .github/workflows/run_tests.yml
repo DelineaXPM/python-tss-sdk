@@ -30,3 +30,4 @@ jobs:
           TSS_USERNAME: ${{ secrets.TSS_USERNAME }}
           TSS_PASSWORD: ${{ secrets.TSS_PASSWORD }}
           TSS_TENANT: ${{ secrets.TSS_TENANT }}
+          SECRET_ID: ${{ secrets.SECRET_ID }}
