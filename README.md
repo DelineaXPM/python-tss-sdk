@@ -126,11 +126,10 @@ Valid credentials are required to run the unit tests. The credentials should be 
 export TSS_USERNAME=myusername
 export TSS_PASSWORD=mysecretpassword
 export TSS_TENANT=mytenant
+export SECRET_ID=42
 ```
 
-The tests assume that the user associated with the specified `TSS_USERNAME` and `TSS_PASSWORD` can read the secret with ID `1`, and that the Secret itself contains `username` and `password` fields.
-
-> Note: The secret ID can be changed manually in `test_server.py` to a secret ID that the user can access.
+The tests assume that the user associated with the specified `TSS_USERNAME` and `TSS_PASSWORD` can read the secret to be fetched, and that the Secret itself contains `username` and `password` fields.
 
 To run the tests with `tox`:
 
