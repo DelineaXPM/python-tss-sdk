@@ -100,6 +100,10 @@ secret = ServerSecret(**secret_server.get_secret(1))
 username = secret.fields['username'].value
 ```
 
+## Using Self-Signed Certificates
+
+When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environment variable should be set to the path of the certificate (in `.pem` format). This will negate the need to ignore SSL certificate verification, which makes your application vunerable. Please reference the [`requests` documentation](https://docs.python-requests.org/en/master/user/advanced/#ssl-cert-verification) for further details on the `REQUESTS_CA_BUNDLE` environment variable, should you require it.
+
 ## Create a Build Environment (optional)
 
 The SDK requires [Python 3.6](https://www.python.org/downloads/) or higher.
