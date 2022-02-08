@@ -106,7 +106,7 @@ When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environme
 
 ## Create a Build Environment (optional)
 
-The SDK requires [Python 3.6](https://www.python.org/downloads/) or higher.
+The SDK requires [Python 3.7](https://www.python.org/downloads/) or higher.
 
 First, ensure Python is in `$PATH`, then run:
 
