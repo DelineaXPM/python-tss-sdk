@@ -100,6 +100,16 @@ secret = ServerSecret(**secret_server.get_secret(1))
 username = secret.fields['username'].value
 ```
 
+It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `json` object.
+
+```python
+secret = secret_server.get_secret_by_path(r"\FolderPath\Secret Name")
+
+print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
+```
+
+> Note: The `path` must be the full folder path and name of the secret.
+
 ## Using Self-Signed Certificates
 
 When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environment variable should be set to the path of the certificate (in `.pem` format). This will negate the need to ignore SSL certificate verification, which makes your application vunerable. Please reference the [`requests` documentation](https://docs.python-requests.org/en/master/user/advanced/#ssl-cert-verification) for further details on the `REQUESTS_CA_BUNDLE` environment variable, should you require it.

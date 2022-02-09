@@ -33,20 +33,22 @@ def test_api_url(secret_server, env_vars):
 
 
 def test_access_token_authorizer(env_vars, authorizer):
-    assert (
-        SecretServer(
-            f"https://{env_vars['tenant']}.secretservercloud.com/",
-            AccessTokenAuthorizer(authorizer.get_access_token()),
-        ).get_secret(env_vars["secret_id"])["id"]
-        == int(env_vars['secret_id'])
-    )
+    assert SecretServer(
+        f"https://{env_vars['tenant']}.secretservercloud.com/",
+        AccessTokenAuthorizer(authorizer.get_access_token()),
+    ).get_secret(env_vars["secret_id"])["id"] == int(env_vars["secret_id"])
 
 
 def test_server_secret(env_vars, secret_server):
-    assert (
-        ServerSecret(**secret_server.get_secret(env_vars["secret_id"])).id
-        == int(env_vars["secret_id"])
+    assert ServerSecret(**secret_server.get_secret(env_vars["secret_id"])).id == int(
+        env_vars["secret_id"]
     )
+
+
+def test_server_secret_by_path(env_vars, secret_server):
+    assert ServerSecret(
+        **secret_server.get_secret_by_path(env_vars["secret_path"])
+    ).id == int(env_vars["secret_id"])
 
 
 def test_nonexistent_secret(secret_server):

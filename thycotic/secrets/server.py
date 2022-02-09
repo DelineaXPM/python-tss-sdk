@@ -284,11 +284,13 @@ class SecretServer:
         self.authorizer = authorizer
         self.api_url = f"{base_url}/{api_path_uri.strip('/')}"
 
-    def get_secret_json(self, id):
+    def get_secret_json(self, id, query_params=None):
         """Gets a Secret from Secret Server
 
         :param id: the id of the secret
         :type id: int
+        :param query_params: query parameters to pass to the endpoint
+        :type query_params: dict
         :return: a JSON formatted string representation of the secret
         :rtype: ``str``
         :raise: :class:`SecretServerAccessError` when the caller does not have
@@ -296,12 +298,20 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
+        endpoint_url = f"{self.api_url}/secrets/{id}"
 
-        return self.process(
-            requests.get(f"{self.api_url}/secrets/{id}", headers=self.headers())
-        ).text
+        if query_params is None:
+            return self.process(requests.get(endpoint_url, headers=self.headers())).text
+        else:
+            return self.process(
+                requests.get(
+                    endpoint_url,
+                    params=query_params,
+                    headers=self.headers(),
+                )
+            ).text
 
-    def get_secret(self, id, fetch_file_attachments=True):
+    def get_secret(self, id, fetch_file_attachments=True, query_params=None):
         """Gets a secret
 
         :param id: the id of the secret
@@ -310,6 +320,8 @@ class SecretServer:
                                        and replace itemValue with the contents
                                        for each item (field), automatically
         :type fetch_file_attachments: bool
+        :param query_params: query parameters to pass to the endpoint
+        :type query_params: dict
         :return: a ``dict`` representation of the secret
         :rtype: ``dict``
         :raise: :class:`SecretServerAccessError` when the caller does not have
@@ -318,7 +330,7 @@ class SecretServer:
                 any other reason
         """
 
-        response = self.get_secret_json(id)
+        response = self.get_secret_json(id, query_params=query_params)
 
         try:
             secret = json.loads(response)
@@ -335,6 +347,27 @@ class SecretServer:
                         )
                     )
         return secret
+
+    def get_secret_by_path(self, secret_path, fetch_file_attachments=True):
+        """Gets a secret by path
+
+        :param secret_path: full path of the secret
+        :type secret_path: str
+        :param fetch_file_attachments: whether or not to fetch file attachments
+                                       and replace itemValue with the contents
+                                       for each item (field), automatically
+        :type fetch_file_attachments: bool
+        :return: a ``dict`` representation of the secret
+        :rtype: ``dict``
+        """
+        path = "\\" + re.sub(r"[\\/]+", r"\\", secret_path).lstrip("\\").rstrip("\\")
+
+        params = {"secretPath": path}
+        return self.get_secret(
+            id=0,
+            fetch_file_attachments=fetch_file_attachments,
+            query_params=params,
+        )
 
 
 class SecretServerV0(SecretServer):

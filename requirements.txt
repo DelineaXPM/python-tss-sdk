@@ -3,3 +3,4 @@ tox
 pytest
 python-dotenv
 flit
+black
