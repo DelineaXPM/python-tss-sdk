@@ -10,29 +10,9 @@ The [Thycotic](https://thycotic.com/) [Secret Server](https://thycotic.com/produ
 python -m pip install python-tss-sdk
 ```
 
-## Secret Server Cloud
+## Secret Server Authentication
 
-The SDK API requires a `username`, `password`, and a `tenant`.
-
-`tenant` simplifies the configuration when using Secret Server Cloud by assuming the default folder structure and creating the _base URL_ from a template that takes the `tenant` and an optional top-level domain (TLD) that defaults to `com`, as parameters.
-
-### Use
-
-Instantiate the `SecretServerCloud` class with `tenant` , `username` and `password` and (optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
-
-```python
-from thycotic.secrets.server import SecretServerCloud
-
-secret_server = SecretServerCloud("mytenant", "myusername", "mypassword")
-
-secret = secret_server.get_secret(1)
-```
-
-The SDK API also contains a `Secret` `@dataclass` containing a subset of the Secret's attributes and a dictionary of all the fields keyed by the Secret's `slug`.
-
-## Secret Server
-
-There are three ways in which you can authorize the `SecretServer` class to fetch secrets.
+There are three ways in which you can authorize the `SecretServer` and `SecretServerCloud` classes to fetch secrets.
 
 - Password Authorization (with `PasswordGrantAuthorizer`)
 - Domain Authorization (with `DomainPasswordGrantAuthorizer`)
@@ -70,11 +50,33 @@ from thycotic.secrets.server import AccessTokenAuthorizer
 authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
 ```
 
-### Initializing SecretServer
+## Secret Server Cloud
+
+The SDK API requires an `Authorizer` and a `tenant`.
+
+`tenant` simplifies the configuration when using Secret Server Cloud by assuming the default folder structure and creating the _base URL_ from a template that takes the `tenant` and an optional top-level domain (TLD) that defaults to `com`, as parameters.
+
+### Useage
+
+Instantiate the `SecretServerCloud` class with `tenant` and an `Authorizer` (optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
+
+```python
+from thycotic.secrets.server import SecretServerCloud
+
+secret_server = SecretServerCloud("mytenant", authorizer)
+
+secret = secret_server.get_secret(1)
+```
+
+The SDK API also contains a `Secret` `@dataclass` containing a subset of the Secret's attributes and a dictionary of all the fields keyed by the Secret's `slug`.
+
+## Initializing SecretServer
+
+### Useage
 
 > NOTE: In v1.0.0 `SecretServer` replaces `SecretServerV1`. However, `SecretServerV0` is available to use instead, for backwards compatibility with v0.0.5 and v0.0.6.
 
-To instantiate the `SecretServer` class, it requires a `base_url`, `authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
+To instantiate the `SecretServer` class, it requires a `base_url`, an `Authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
 
 ```python
 from thycotic.secrets.server import SecretServer
@@ -141,6 +143,7 @@ export TSS_USERNAME=myusername
 export TSS_PASSWORD=mysecretpassword
 export TSS_TENANT=mytenant
 export SECRET_ID=42
+export SECRET_PATH=\Test Secrets\SecretName
 ```
 
 The tests assume that the user associated with the specified `TSS_USERNAME` and `TSS_PASSWORD` can read the secret to be fetched, and that the Secret itself contains `username` and `password` fields.
