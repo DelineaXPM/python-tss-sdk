@@ -1,8 +1,8 @@
-# The Thycotic Secret Server Python SDK
+# The Delinea Secret Server Python SDK
 
-![PyPI Version](https://img.shields.io/pypi/v/python-tss-sdk) ![License](https://img.shields.io/github/license/thycotic/python-tss-sdk) ![Python Versions](https://img.shields.io/pypi/pyversions/python-tss-sdk)
+![PyPI Version](https://img.shields.io/pypi/v/python-tss-sdk) ![License](https://img.shields.io/github/license/delinea/python-tss-sdk) ![Python Versions](https://img.shields.io/pypi/pyversions/python-tss-sdk)
 
-The [Thycotic](https://thycotic.com/) [Secret Server](https://thycotic.com/products/secret-server/) Python SDK contains classes that interact with Secret Server via the REST API.
+The [Delinea](https://delinea.com/) [Secret Server](https://delinea.com/products/secret-server/) Python SDK contains classes that interact with Secret Server via the REST API.
 
 ## Install
 

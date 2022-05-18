@@ -1,4 +1,4 @@
-"""The Thycotic Secret Server SDK API facilitates access to the Secret Server
+"""The Delinea Secret Server SDK API facilitates access to the Secret Server
 REST API using *OAuth2 Bearer Token* authentication.
 
 Example:
