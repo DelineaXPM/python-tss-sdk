@@ -1,6 +1,6 @@
 import pytest
 
-from thycotic.secrets.server import (
+from delinea.secrets.server import (
     AccessTokenAuthorizer,
     SecretServer,
     SecretServerClientError,

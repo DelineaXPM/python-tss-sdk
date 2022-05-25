@@ -1,6 +1,6 @@
 # The Delinea Secret Server Python SDK
 
-![PyPI Version](https://img.shields.io/pypi/v/python-tss-sdk) ![License](https://img.shields.io/github/license/delinea/python-tss-sdk) ![Python Versions](https://img.shields.io/pypi/pyversions/python-tss-sdk)
+![PyPI Version](https://img.shields.io/pypi/v/python-tss-sdk) ![License](https://img.shields.io/github/license/DelineaXPM/python-tss-sdk) ![Python Versions](https://img.shields.io/pypi/pyversions/python-tss-sdk)
 
 The [Delinea](https://delinea.com/) [Secret Server](https://delinea.com/products/secret-server/) Python SDK contains classes that interact with Secret Server via the REST API.
 
@@ -25,7 +25,7 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 If using traditional `username` and `password` authentication to log in to your Secret Server, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
 
 ```python
-from thycotic.secrets.server import PasswordGrantAuthorizer
+from delinea.secrets.server import PasswordGrantAuthorizer
 
 authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", "myusername", "mypassword")
 ```
@@ -35,7 +35,7 @@ authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", "myusernam
 To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
 
 ```python
-from thycotic.secrets.server import DomainPasswordGrantAuthorizer
+from delinea.secrets.server import DomainPasswordGrantAuthorizer
 
 authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", "myusername", "mydomain", "mypassword")
 ```
@@ -45,7 +45,7 @@ authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", "myu
 If you already have an `access_token`, you can pass directly via the `AccessTokenAuthorizer`.
 
 ```python
-from thycotic.secrets.server import AccessTokenAuthorizer
+from delinea.secrets.server import AccessTokenAuthorizer
 
 authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
 ```
@@ -61,7 +61,7 @@ The SDK API requires an `Authorizer` and a `tenant`.
 Instantiate the `SecretServerCloud` class with `tenant` and an `Authorizer` (optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
 
 ```python
-from thycotic.secrets.server import SecretServerCloud
+from delinea.secrets.server import SecretServerCloud
 
 secret_server = SecretServerCloud("mytenant", authorizer)
 
@@ -79,7 +79,7 @@ The SDK API also contains a `Secret` `@dataclass` containing a subset of the Sec
 To instantiate the `SecretServer` class, it requires a `base_url`, an `Authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
 
 ```python
-from thycotic.secrets.server import SecretServer
+from delinea.secrets.server import SecretServer
 
 secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
 ```
@@ -95,7 +95,7 @@ print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['p
 Alternatively, you can use pass the json to `ServerSecret` which returns a `dataclass` object representation of the secret:
 
 ```shell
-from thycotic.secrets.server import ServerSecret
+from delinea.secrets.server import ServerSecret
 
 secret = ServerSecret(**secret_server.get_secret(1))
 
@@ -124,7 +124,7 @@ First, ensure Python is in `$PATH`, then run:
 
 ```shell
 # Clone the repo
-git clone https://github.com/thycotic/python-tss-sdk
+git clone https://github.com/DelineaXPM/python-tss-sdk
 cd python-tss-sdk
 
 # Create a virtual environment
