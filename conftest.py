@@ -1,7 +1,7 @@
 import os
 import pytest
 from dotenv import load_dotenv
-from thycotic.secrets.server import PasswordGrantAuthorizer, SecretServerCloud
+from delinea.secrets.server import PasswordGrantAuthorizer, SecretServerCloud
 
 load_dotenv()
 

@@ -1,6 +1,6 @@
 import os
 
-from thycotic.secrets.server import (
+from delinea.secrets.server import (
     SecretServerCloud,
     SecretServerError,
 )
