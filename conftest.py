@@ -13,7 +13,7 @@ def env_vars():
         "password": os.getenv("TSS_PASSWORD"),
         "tenant": os.getenv("TSS_TENANT"),
         "secret_id": os.getenv("SECRET_ID"),
-        "secret_path": os.getenv("SECRET_PATH")
+        "secret_path": os.getenv("SECRET_PATH"),
     }
 
 
