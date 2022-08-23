@@ -4,8 +4,8 @@ build-backend = "flit_core.buildapi"
 
 [tool.flit.metadata]
 module = "delinea"
-author = "Adam Migus"
-author-email = "adam@migus.org"
+author = "Delinea Integrations"
+author-email = "GitHub@delinea.com"
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
