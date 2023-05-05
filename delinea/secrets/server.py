@@ -368,7 +368,58 @@ class SecretServer:
             fetch_file_attachments=fetch_file_attachments,
             query_params=params,
         )
+    
+    def search_secrets(self, query_params=None):
+        """Get a Secrets from Secret Server
 
+        :param query_params: query parameters to pass to the endpoint
+        :type query_params: dict
+        :return: a JSON formatted string representation of the secrets
+        :rtype: ``str``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the secret
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+        endpoint_url = f"{self.api_url}/secrets"
+
+        if query_params is None:
+            return self.process(requests.get(endpoint_url, headers=self.headers())).text
+        else:
+            return self.process(
+                requests.get(
+                    endpoint_url,
+                    params=query_params,
+                    headers=self.headers(),
+                )
+            ).text
+
+    def get_secrets_by_folderid(self, folder_id):
+        """Get a secrets by folder id
+
+        :param folder_id: the id of the folder
+        :type id: int
+        :return: a ``list`` of the secret id's
+        :rtype: ``list``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the secret
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+
+        params = {"filter.folderId": folder_id}
+        response = self.search_secrets(query_params=params)
+
+        try:
+            secrets = json.loads(response)
+        except json.JSONDecodeError:
+            raise SecretServerError(response)
+        
+        secret_ids = []
+        for secret in secrets['records']:
+            secret_ids.append(secret['id'])
+
+        return secret_ids
 
 class SecretServerV0(SecretServer):
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
