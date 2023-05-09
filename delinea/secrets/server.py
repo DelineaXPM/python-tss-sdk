@@ -370,7 +370,7 @@ class SecretServer:
         )
     
     def search_secrets(self, query_params=None):
-        """Get a Secrets from Secret Server
+        """Get Secrets from Secret Server
 
         :param query_params: query parameters to pass to the endpoint
         :type query_params: dict
@@ -394,8 +394,8 @@ class SecretServer:
                 )
             ).text
 
-    def get_secrets_by_folderid(self, folder_id):
-        """Get a secrets by folder id
+    def get_secret_ids_by_folderid(self, folder_id):
+        """Gets a list of secrets ids by folder id
 
         :param folder_id: the id of the folder
         :type id: int
