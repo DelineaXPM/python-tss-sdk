@@ -395,7 +395,7 @@ class SecretServer:
             ).text
 
     def get_secret_ids_by_folderid(self, folder_id):
-        """Gets a list of secrets ids by folder id
+        """Gets a list of secrets ids by folder_id
 
         :param folder_id: the id of the folder
         :type id: int
