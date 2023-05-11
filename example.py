@@ -6,7 +6,6 @@ from delinea.secrets.server import (
 )
 
 if __name__ == "__main__":
-
     creds = {
         "username": os.getenv("TSS_USERNAME"),
         "password": os.getenv("TSS_PASSWORD"),

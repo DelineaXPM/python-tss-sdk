@@ -368,7 +368,7 @@ class SecretServer:
             fetch_file_attachments=fetch_file_attachments,
             query_params=params,
         )
-    
+
     def search_secrets(self, query_params=None):
         """Get Secrets from Secret Server
 
@@ -414,12 +414,13 @@ class SecretServer:
             secrets = json.loads(response)
         except json.JSONDecodeError:
             raise SecretServerError(response)
-        
+
         secret_ids = []
-        for secret in secrets['records']:
-            secret_ids.append(secret['id'])
+        for secret in secrets["records"]:
+            secret_ids.append(secret["id"])
 
         return secret_ids
+
 
 class SecretServerV0(SecretServer):
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
