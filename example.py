@@ -6,11 +6,10 @@ from delinea.secrets.server import (
     SecretServerCloud,
     SecretServerError,
     PasswordGrantAuthorizer,
-    ServerSecret
+    ServerSecret,
 )
 
 if __name__ == "__main__":
-
     tenant = os.getenv("TSS_TENANT")
     base_url = f"https://{tenant}.secretservercloud.com"
     authorizer = PasswordGrantAuthorizer(
@@ -18,7 +17,7 @@ if __name__ == "__main__":
         os.getenv("TSS_USERNAME"),
         os.getenv("TSS_PASSWORD"),
     )
-    
+
     secret_server_cloud = SecretServerCloud(tenant=tenant, authorizer=authorizer)
 
     try:
