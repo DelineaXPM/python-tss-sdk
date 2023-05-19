@@ -378,7 +378,7 @@ class SecretServerV0(SecretServer):
     It gets an ``access_token`` that it uses to create an *HTTP Authorization
     Header* which it includes in each REST API call.
 
-    This class maintains backwards compatability with v0.0.5
+    This class maintains backwards compatibility with v0.0.5
     """
 
     def __init__(

@@ -120,7 +120,7 @@ When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environme
 
 ## Create a Build Environment (optional)
 
-The SDK requires [Python 3.7](https://www.python.org/downloads/) or higher.
+The SDK requires [Python 3.8](https://www.python.org/downloads/) or higher.
 
 First, ensure Python is in `$PATH`, then run:
 
@@ -144,8 +144,8 @@ Valid credentials are required to run the unit tests. The credentials should be 
 export TSS_USERNAME=myusername
 export TSS_PASSWORD=mysecretpassword
 export TSS_TENANT=mytenant
-export SECRET_ID=42
-export SECRET_PATH=\Test Secrets\SecretName
+export TSS_SECRET_ID=42
+export TSS_SECRET_PATH=\Test Secrets\SecretName
 ```
 
 The tests assume that the user associated with the specified `TSS_USERNAME` and `TSS_PASSWORD` can read the secret to be fetched, and that the Secret itself contains `username` and `password` fields.
