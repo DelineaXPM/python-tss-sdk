@@ -55,5 +55,13 @@ def test_nonexistent_secret(secret_server):
     with pytest.raises(SecretServerClientError):
         secret_server.get_secret(1000)
 
+
 def test_server_secret_ids_by_folderid(env_vars, secret_server):
-    assert type(ServerSecret(**secret_server.get_secret_ids_by_folderid(env_vars["folder_id"]))) is list
+    assert (
+        type(
+            ServerSecret(
+                **secret_server.get_secret_ids_by_folderid(env_vars["folder_id"])
+            )
+        )
+        is list
+    )
