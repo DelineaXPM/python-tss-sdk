@@ -47,7 +47,7 @@ def test_server_secret(env_vars, secret_server):
 
 def test_server_secret_by_path(env_vars, secret_server):
     assert ServerSecret(
-        **secret_server.get_secret_by_path("/tss-sdk-go/Amazon")
+        **secret_server.get_secret_by_path(env_vars["secret_path"])
     ).id == int(env_vars["secret_id"])
 
 
