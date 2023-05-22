@@ -47,10 +47,14 @@ def test_server_secret(env_vars, secret_server):
 
 def test_server_secret_by_path(env_vars, secret_server):
     assert ServerSecret(
-        **secret_server.get_secret_by_path("/tss-sdk-go/Amazon")
+        **secret_server.get_secret_by_path(env_vars["secret_path"])
     ).id == int(env_vars["secret_id"])
 
 
 def test_nonexistent_secret(secret_server):
     with pytest.raises(SecretServerClientError):
         secret_server.get_secret(1000)
+
+
+def test_server_secret_ids_by_folderid(env_vars, secret_server):
+    assert type(secret_server.get_secret_ids_by_folderid(env_vars["folder_id"])) is list
