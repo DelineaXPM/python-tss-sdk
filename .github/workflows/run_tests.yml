@@ -3,7 +3,7 @@ name: Run Tests
 on: [pull_request]
 
 jobs:
-  
+
   build:
     runs-on: ubuntu-latest
     environment: testing
@@ -32,3 +32,4 @@ jobs:
           TSS_TENANT: ${{ secrets.TSS_TENANT }}
           TSS_SECRET_ID: ${{ secrets.TSS_SECRET_ID }}
           TSS_SECRET_PATH: ${{ secrets.TSS_SECRET_PATH }}
+          TSS_FOLDER_ID: ${{ secrets.TSS_FOLDER_ID }}
