@@ -60,7 +60,7 @@ def test_server_secret_ids_by_folderid(env_vars, secret_server):
     assert (
         type(
             ServerSecret(
-                **secret_server.get_secret_ids_by_folderid(env_vars["folder_id"])
+                *secret_server.get_secret_ids_by_folderid(env_vars["folder_id"])
             )
         )
         is list
