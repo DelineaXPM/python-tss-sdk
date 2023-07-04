@@ -342,7 +342,9 @@ class SecretServer:
                 if item["fileAttachmentId"]:
                     endpoint_url = f"{self.api_url}/secrets/{id}/fields/{item['slug']}"
                     if query_params is None:
-                        item["itemValue"] = self.process(requests.get(endpoint_url, headers=self.headers()))
+                        item["itemValue"] = self.process(
+                            requests.get(endpoint_url, headers=self.headers())
+                        )
                     else:
                         item["itemValue"] = self.process(
                             requests.get(
@@ -414,7 +416,9 @@ class SecretServer:
 
         params = {"filter.folderId": folder_id}
         endpoint_url = f"{self.api_url}/secrets/search-total"
-        params["take"] = self.process(requests.get(endpoint_url, params=params, headers=self.headers())).text
+        params["take"] = self.process(
+            requests.get(endpoint_url, params=params, headers=self.headers())
+        ).text
         response = self.search_secrets(query_params=params)
 
         try:
