@@ -340,12 +340,19 @@ class SecretServer:
         if fetch_file_attachments:
             for item in secret["items"]:
                 if item["fileAttachmentId"]:
-                    item["itemValue"] = self.process(
-                        requests.get(
-                            f"{self.api_url}/secrets/{id}/fields/{item['slug']}",
-                            headers=self.headers(),
+                    endpoint_url = f"{self.api_url}/secrets/{id}/fields/{item['slug']}"
+                    if query_params is None:
+                        item["itemValue"] = self.process(
+                            requests.get(endpoint_url, headers=self.headers())
                         )
-                    )
+                    else:
+                        item["itemValue"] = self.process(
+                            requests.get(
+                                endpoint_url,
+                                params=query_params,
+                                headers=self.headers(),
+                            )
+                        )
         return secret
 
     def get_secret_by_path(self, secret_path, fetch_file_attachments=True):
@@ -408,6 +415,10 @@ class SecretServer:
         """
 
         params = {"filter.folderId": folder_id}
+        endpoint_url = f"{self.api_url}/secrets/search-total"
+        params["take"] = self.process(
+            requests.get(endpoint_url, params=params, headers=self.headers())
+        ).text
         response = self.search_secrets(query_params=params)
 
         try:
