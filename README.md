@@ -67,7 +67,7 @@ from delinea.secrets.server import SecretServerCloud
 
 secret_server = SecretServerCloud("mytenant", authorizer)
 
-secret = secret_server.get_secret(1)
+secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
 ```
 
 The SDK API also contains a `Secret` `@dataclass` containing a subset of the Secret's attributes and a dictionary of all the fields keyed by the Secret's `slug`.
@@ -89,7 +89,7 @@ secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
 Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
 
 ```python
-secret = secret_server.get_secret(1)
+secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
 
 print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
 ```
@@ -99,7 +99,7 @@ Alternatively, you can use pass the json to `ServerSecret` which returns a `data
 ```shell
 from delinea.secrets.server import ServerSecret
 
-secret = ServerSecret(**secret_server.get_secret(1))
+secret = ServerSecret(**secret_server.get_secret(os.getenv("TSS_SECRET_ID")))
 
 username = secret.fields['username'].value
 ```
@@ -107,7 +107,7 @@ username = secret.fields['username'].value
 It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `json` object.
 
 ```python
-secret = secret_server.get_secret_by_path(r"\FolderPath\Secret Name")
+secret = secret_server.get_secret_by_path(r"TSS_SECRET_PATH")
 
 print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
 ```
