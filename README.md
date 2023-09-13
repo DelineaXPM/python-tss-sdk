@@ -113,7 +113,7 @@ secret = secret_server.get_secret_by_path(r"TSS_SECRET_PATH")
 
 serverSecret = ServerSecret(**secret)
 
-print(f"username: {ServerSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 > Note: The `path` must be the full folder path and name of the secret.
