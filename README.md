@@ -65,7 +65,7 @@ Instantiate the `SecretServerCloud` class with `tenant` and an `Authorizer` (opt
 ```python
 from delinea.secrets.server import SecretServerCloud
 
-secret_server = SecretServerCloud("mytenant", authorizer)
+secret_server = SecretServerCloud(tenant=tenant, authorizer=authorizer)
 
 secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
 ```
@@ -83,7 +83,7 @@ To instantiate the `SecretServer` class, it requires a `base_url`, an `Authorize
 ```python
 from delinea.secrets.server import SecretServer
 
-secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
+secret_server = SecretServer(tenant=tenant, authorizer=authorizer)
 ```
 
 Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
