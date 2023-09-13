@@ -91,7 +91,9 @@ Secrets can be fetched using the `get_secret` method, which takes an integer `id
 ```python
 secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
 
-print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 Alternatively, you can use pass the json to `ServerSecret` which returns a `dataclass` object representation of the secret:
@@ -109,7 +111,9 @@ It is also now possible to fetch a secret by the secrets `path` using the `get_s
 ```python
 secret = secret_server.get_secret_by_path(r"TSS_SECRET_PATH")
 
-print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {ServerSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 > Note: The `path` must be the full folder path and name of the secret.
