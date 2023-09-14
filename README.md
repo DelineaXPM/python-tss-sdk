@@ -68,6 +68,10 @@ from delinea.secrets.server import SecretServerCloud
 secret_server = SecretServerCloud(tenant=tenant, authorizer=authorizer)
 
 secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
+
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 The SDK API also contains a `Secret` `@dataclass` containing a subset of the Secret's attributes and a dictionary of all the fields keyed by the Secret's `slug`.
@@ -83,7 +87,7 @@ To instantiate the `SecretServer` class, it requires a `base_url`, an `Authorize
 ```python
 from delinea.secrets.server import SecretServer
 
-secret_server = SecretServer(tenant=tenant, authorizer=authorizer)
+secret_server = SecretServer("https://hostname/SecretServer", authorizer=authorizer)
 ```
 
 Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
