@@ -22,6 +22,7 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 
 ### Usage
 
+
 #### Password Authorization
 
 If using traditional `username` and `password` authentication to log in to your Secret Server, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
