@@ -29,7 +29,7 @@ If using traditional `username` and `password` authentication to log in to your 
 ```python
 from delinea.secrets.server import PasswordGrantAuthorizer
 
-authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password")")
+authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password"))
 ```
 
 #### Domain Authorization
