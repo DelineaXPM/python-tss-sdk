@@ -282,7 +282,7 @@ class SecretServer:
 
         self.base_url = base_url.rstrip("/")
         self.authorizer = authorizer
-        self.api_url = f"{base_url}/{api_path_uri.strip('/')}"
+        self.api_url = f"{self.base_url}/{api_path_uri.strip('/')}"
 
     def get_secret_json(self, id, query_params=None):
         """Gets a Secret from Secret Server
