@@ -6,7 +6,7 @@ Example:
     # connect to Secret Server
     secret_server = SecretServer(base_url, authorizer, api_path_uri='/api/v1')
     # or, for Secret Server Cloud
-    secret_server = SecretServerCloud(tenant, username, password, tld='com')
+    secret_server = SecretServerCloud(tenant, authorizer, tld='com')
 
     # to get the secret as a ``dict``
     secret = secret_server.get_secret(123)
@@ -282,7 +282,7 @@ class SecretServer:
 
         self.base_url = base_url.rstrip("/")
         self.authorizer = authorizer
-        self.api_url = f"{self.base_url}/{api_path_uri.strip('/')}"
+        self.api_url = f"{base_url}/{api_path_uri.strip('/')}"
 
     def get_secret_json(self, id, query_params=None):
         """Gets a Secret from Secret Server
