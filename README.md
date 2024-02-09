@@ -1,5 +1,6 @@
 # The Delinea Secret Server Python SDK
 
+
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 ![PyPI Version](https://img.shields.io/pypi/v/python-tss-sdk) ![License](https://img.shields.io/github/license/DelineaXPM/python-tss-sdk) ![Python Versions](https://img.shields.io/pypi/pyversions/python-tss-sdk)
@@ -22,6 +23,7 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 
 ### Usage
 
+
 #### Password Authorization
 
 If using traditional `username` and `password` authentication to log in to your Secret Server, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
@@ -29,7 +31,7 @@ If using traditional `username` and `password` authentication to log in to your 
 ```python
 from delinea.secrets.server import PasswordGrantAuthorizer
 
-authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password"))
+authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password")")
 ```
 
 #### Domain Authorization
@@ -65,9 +67,13 @@ Instantiate the `SecretServerCloud` class with `tenant` and an `Authorizer` (opt
 ```python
 from delinea.secrets.server import SecretServerCloud
 
-secret_server = SecretServerCloud("mytenant", authorizer)
+secret_server = SecretServerCloud(tenant=tenant, authorizer=authorizer)
 
-secret = secret_server.get_secret(1)
+secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
+
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 The SDK API also contains a `Secret` `@dataclass` containing a subset of the Secret's attributes and a dictionary of all the fields keyed by the Secret's `slug`.
@@ -83,15 +89,17 @@ To instantiate the `SecretServer` class, it requires a `base_url`, an `Authorize
 ```python
 from delinea.secrets.server import SecretServer
 
-secret_server = SecretServer("https://hostname/SecretServer", my_authorizer)
+secret_server = SecretServer("https://hostname/SecretServer", authorizer=authorizer)
 ```
 
 Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
 
 ```python
-secret = secret_server.get_secret(1)
+secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
 
-print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 Alternatively, you can use pass the json to `ServerSecret` which returns a `dataclass` object representation of the secret:
@@ -99,7 +107,7 @@ Alternatively, you can use pass the json to `ServerSecret` which returns a `data
 ```shell
 from delinea.secrets.server import ServerSecret
 
-secret = ServerSecret(**secret_server.get_secret(1))
+secret = ServerSecret(**secret_server.get_secret(os.getenv("TSS_SECRET_ID")))
 
 username = secret.fields['username'].value
 ```
@@ -107,9 +115,11 @@ username = secret.fields['username'].value
 It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `json` object.
 
 ```python
-secret = secret_server.get_secret_by_path(r"\FolderPath\Secret Name")
+secret = secret_server.get_secret_by_path(r"TSS_SECRET_PATH")
 
-print(f"username: {secret.fields['username'].value}\npassword: {secret.fields['password'].value}")
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
 > Note: The `path` must be the full folder path and name of the secret.

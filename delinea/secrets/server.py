@@ -6,7 +6,7 @@ Example:
     # connect to Secret Server
     secret_server = SecretServer(base_url, authorizer, api_path_uri='/api/v1')
     # or, for Secret Server Cloud
-    secret_server = SecretServerCloud(tenant, username, password, tld='com')
+    secret_server = SecretServerCloud(tenant, authorizer, tld='com')
 
     # to get the secret as a ``dict``
     secret = secret_server.get_secret(123)
