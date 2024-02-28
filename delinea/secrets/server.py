@@ -461,7 +461,7 @@ class SecretServer:
             child_folder_ids.append(childFolder["id"])
 
         return child_folder_ids
-    
+
 
 class SecretServerV0(SecretServer):
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server
