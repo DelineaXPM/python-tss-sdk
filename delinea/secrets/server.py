@@ -432,6 +432,36 @@ class SecretServer:
 
         return secret_ids
 
+    def get_child_folder_ids_by_folderid(self, folder_id):
+        """Gets a list of child folder ids by folder_id
+        :param folder_id: the id of the folder
+        :type id: int
+        :return: a ``list`` of the child folder id's
+        :rtype: ``list``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the secret
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+
+        params = {"getAllChildren": True}
+        endpoint_url = f"{self.api_url}/folders/{folder_id}"
+        params["take"] = self.process(
+            requests.get(endpoint_url, params=params, headers=self.headers())
+        ).text
+        response = self.search_secrets(query_params=params)
+
+        try:
+            response = json.loads(response)
+        except json.JSONDecodeError:
+            raise SecretServerError(response)
+
+        child_folder_ids = []
+        for childFolder in response["childFolders"]:
+            child_folder_ids.append(childFolder["id"])
+
+        return child_folder_ids
+    
 
 class SecretServerV0(SecretServer):
     """A class that uses an *OAuth2 Bearer Token* to access the Secret Server

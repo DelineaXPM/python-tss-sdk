@@ -58,3 +58,7 @@ def test_nonexistent_secret(secret_server):
 
 def test_server_secret_ids_by_folderid(env_vars, secret_server):
     assert type(secret_server.get_secret_ids_by_folderid(env_vars["folder_id"])) is list
+
+
+def test_server_child_folder_ids_by_folderid(env_vars, secret_server):
+    assert type(secret_server.get_child_folder_ids_by_folderid(env_vars["folder_id"])) is list
