@@ -15,7 +15,7 @@ python -m pip install python-tss-sdk
 
 ## Secret Server Authentication
 
-There are three ways in which you can authorize the `SecretServer` and `SecretServerCloud` classes to fetch secrets.
+There are three ways in which you can authorize the `SecretServer` and `SecretServerCloud` classess to fetch secrets.
 
 - Password Authorization (with `PasswordGrantAuthorizer`)
 - Domain Authorization (with `DomainPasswordGrantAuthorizer`)
