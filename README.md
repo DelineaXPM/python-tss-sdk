@@ -122,6 +122,17 @@ serverSecret = ServerSecret(**secret)
 print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
 ```
 
+> Note: Add a try-except block to the code to get more detailed error messages.
+
+```python
+from delinea.secrets.server import SecretServerError
+
+try:
+    # code...
+except SecretServerError as e:
+    print(e.message)
+```
+
 > Note: The `path` must be the full folder path and name of the secret.
 
 ## Using Self-Signed Certificates
