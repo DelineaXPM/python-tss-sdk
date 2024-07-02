@@ -33,3 +33,4 @@ jobs:
           TSS_SECRET_ID: ${{ secrets.TSS_SECRET_ID }}
           TSS_SECRET_PATH: ${{ secrets.TSS_SECRET_PATH }}
           TSS_FOLDER_ID: ${{ secrets.TSS_FOLDER_ID }}
+          TSS_FOLDER_PATH: ${{ secrets.TSS_FOLDER_PATH }}
