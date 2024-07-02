@@ -1,9 +1,6 @@
 name: Run Tests
 
-on:
-  push:
-    branches:
-      - bugFixes.delinea.rajani  # specify the branch you want to trigger on
+on: [pull_request]
 
 jobs:
 
