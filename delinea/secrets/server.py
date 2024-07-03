@@ -94,6 +94,57 @@ class ServerSecret:
         }
 
 
+@dataclass
+class ServerFolder:
+    # Based on https://gist.github.com/jaytaylor/3660565
+    @staticmethod
+    def snake_case(camel_cased):
+        """Transform to snake case
+
+        Transforms the keys of the given map from camelCase to snake_case.
+        """
+        return [
+            (
+                re.compile("([a-z0-9])([A-Z])")
+                .sub(r"\1_\2", re.compile(r"(.)([A-Z][a-z]+)").sub(r"\1_\2", k))
+                .lower(),
+                v,
+            )
+            for (k, v) in camel_cased.items()
+        ]
+
+    @dataclass
+    class Field:
+        item_id: int
+        value: str
+        slug: str
+
+        def __init__(self, **kwargs):
+            # The REST API returns attributes with camelCase names which we
+            # replace with snake_case per Python conventions
+            for k, v in ServerSecret.snake_case(kwargs):
+                if k == "item_value":
+                    k = "value"
+                setattr(self, k, v)
+
+    id: int
+    folder_name: str
+    folder_path: str
+    parent_folder_id: int
+    folder_type_id: int
+    secret_policy_id: int
+    inherit_secret_policy: bool
+    inherit_permissions: bool
+    child_folders: list
+    secret_templates: list
+
+    def __init__(self, **kwargs):
+        # The REST API returns attributes with camelCase names which we replace
+        # with snake_case per Python conventions
+        for k, v in self.snake_case(kwargs):
+            setattr(self, k, v)
+
+
 class SecretServerError(Exception):
     """An Exception that includes a message and the server response"""
 
@@ -311,6 +362,36 @@ class SecretServer:
                 timeout=60)
             ).text
 
+    def get_folder_json(self, id, query_params=None, get_all_children=True):
+        """Gets a Folder from Secret Server
+
+        :param id: the id of the folder
+        :type id: int
+        :param query_params: query parameters to pass to the endpoint
+        :type query_params: dict
+        :return: a JSON formatted string representation of the folder
+        :rtype: ``str``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the folder
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+        endpoint_url = f"{self.api_url}/folders/{id}"
+
+        if get_all_children:
+            query_params["getAllChildren"] = "true"
+
+        if query_params is None:
+            return self.process(requests.get(endpoint_url, headers=self.headers())).text
+        else:
+            return self.process(
+                requests.get(
+                    endpoint_url,
+                    params=query_params,
+                    headers=self.headers(),
+                )
+            ).text
+
     def get_secret(self, id, fetch_file_attachments=True, query_params=None):
         """Gets a secret
 
@@ -355,6 +436,34 @@ class SecretServer:
                         )
         return secret
 
+    def get_folder(self, id, query_params=None, get_all_children=False):
+        """Gets a folder
+
+        :param id: the id of the folder
+        :type id: int
+        :param getAllChildren: Whether to retrieve all child folders of the requested folder
+        :type fetch_file_attachments: bool
+        :param query_params: query parameters to pass to the endpoint
+        :type query_params: dict
+        :return: a ``dict`` representation of the folder
+        :rtype: ``dict``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the folder
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+
+        response = self.get_folder_json(
+            id, query_params=query_params, get_all_children=get_all_children
+        )
+
+        try:
+            folder = json.loads(response)
+        except json.JSONDecodeError:
+            raise SecretServerError(response)
+
+        return folder
+
     def get_secret_by_path(self, secret_path, fetch_file_attachments=True):
         """Gets a secret by path
 
@@ -373,6 +482,23 @@ class SecretServer:
         return self.get_secret(
             id=0,
             fetch_file_attachments=fetch_file_attachments,
+            query_params=params,
+        )
+
+    def get_folder_by_path(self, folder_path, get_all_children=True):
+        """Gets a folder by path
+
+        :param folder_path: full path of the folder
+        :type folder_path: str
+        :return: a ``dict`` representation of the folder
+        :rtype: ``dict``
+        """
+        path = "\\" + re.sub(r"[\\/]+", r"\\", folder_path).lstrip("\\").rstrip("\\")
+
+        params = {"folderPath": path}
+        return self.get_folder(
+            id=0,
+            get_all_children=get_all_children,
             query_params=params,
         )
 
@@ -399,6 +525,31 @@ class SecretServer:
                     params=query_params,
                     headers=self.headers(),
                 timeout=60)
+            ).text
+
+    def lookup_folders(self, query_params=None):
+        """Lookup Folders from Secret Server
+
+        :param query_params: query parameters to pass to the endpoint
+        :type query_params: dict
+        :return: a JSON formatted string representation of the folders, containing only id and name
+        :rtype: ``str``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the secret
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+        endpoint_url = f"{self.api_url}/folders/lookup"
+
+        if query_params is None:
+            return self.process(requests.get(endpoint_url, headers=self.headers())).text
+        else:
+            return self.process(
+                requests.get(
+                    endpoint_url,
+                    params=query_params,
+                    headers=self.headers(),
+                )
             ).text
 
     def get_secret_ids_by_folderid(self, folder_id):
@@ -431,6 +582,45 @@ class SecretServer:
             secret_ids.append(secret["id"])
 
         return secret_ids
+
+    def get_child_folder_ids_by_folderid(self, folder_id):
+        """Gets a list of child folder ids by folder_id
+        :param folder_id: the id of the folder
+        :type id: int
+        :return: a ``list`` of the child folder id's
+        :rtype: ``list``
+        :raise: :class:`SecretServerAccessError` when the caller does not have
+                permission to access the secret
+        :raise: :class:`SecretServerError` when the REST API call fails for
+                any other reason
+        """
+
+        params = {
+            "filter.parentFolderId": folder_id,
+            "filter.limitToDirectDescendents": True,
+        }
+        params["take"] = 1
+        endpoint_url = f"{self.api_url}/folders/lookup"
+
+        params["take"] = self.process(
+            requests.get(endpoint_url, params=params, headers=self.headers())
+        ).json()["total"]
+        # Handle result of zero child folders
+        if params["take"] != 0:
+            response = self.lookup_folders(query_params=params)
+
+            try:
+                response = json.loads(response)
+            except json.JSONDecodeError:
+                raise SecretServerError(response)
+
+            child_folder_ids = []
+            for childFolder in response["records"]:
+                child_folder_ids.append(childFolder["id"])
+
+            return child_folder_ids
+        else:
+            return []
 
 
 class SecretServerV0(SecretServer):

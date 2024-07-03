@@ -168,6 +168,7 @@ export TSS_TENANT=mytenant
 export TSS_SECRET_ID=42
 export TSS_SECRET_PATH=\Test Secrets\SecretName
 export TSS_FOLDER_ID=1
+export TSS_FOLDER_PATH=\Test Secrets
 ```
 
 The tests assume that the user associated with the specified `TSS_USERNAME` and `TSS_PASSWORD` can read the secret to be fetched, and that the Secret itself contains `username` and `password` fields.

@@ -6,6 +6,7 @@ from delinea.secrets.server import (
     SecretServerClientError,
     SecretServerError,
     ServerSecret,
+    ServerFolder,
 )
 
 
@@ -31,7 +32,6 @@ def test_api_url(secret_server, env_vars):
         == f"https://{env_vars['tenant']}.secretservercloud.com/api/v1"
     )
 
-
 def test_access_token_authorizer(env_vars, authorizer):
     assert SecretServer(
         f"https://{env_vars['tenant']}.secretservercloud.com/",
@@ -51,10 +51,28 @@ def test_server_secret_by_path(env_vars, secret_server):
     ).id == int(env_vars["secret_id"])
 
 
+def test_server_folder_by_path(env_vars, secret_server):
+    assert ServerFolder(
+        **secret_server.get_folder_by_path(env_vars["folder_path"])
+    ).id == int(env_vars["folder_id"])
+
+
 def test_nonexistent_secret(secret_server):
     with pytest.raises(SecretServerClientError):
         secret_server.get_secret(1000)
 
 
+def test_nonexistent_folder(secret_server):
+    with pytest.raises(SecretServerClientError):
+        secret_server.get_folder(1000)
+
+
 def test_server_secret_ids_by_folderid(env_vars, secret_server):
     assert type(secret_server.get_secret_ids_by_folderid(env_vars["folder_id"])) is list
+
+
+def test_server_child_folder_ids_by_folderid(env_vars, secret_server):
+    assert (
+        type(secret_server.get_child_folder_ids_by_folderid(env_vars["folder_id"]))
+        is list
+    )
