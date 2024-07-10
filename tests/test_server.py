@@ -32,6 +32,7 @@ def test_api_url(secret_server, env_vars):
         == f"https://{env_vars['tenant']}.secretservercloud.com/api/v1"
     )
 
+
 def test_access_token_authorizer(env_vars, authorizer):
     assert SecretServer(
         f"https://{env_vars['tenant']}.secretservercloud.com/",
