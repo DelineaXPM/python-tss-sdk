@@ -1,6 +1,9 @@
 name: Run Tests
 
-on: [pull_request]
+on:
+  push:
+    branches:
+      - test  # specify the branch you want to trigger on
 
 jobs:
 
