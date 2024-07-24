@@ -15,7 +15,7 @@ def env_vars():
         "secret_id": os.getenv("TSS_SECRET_ID"),
         "secret_path": os.getenv("TSS_SECRET_PATH"),
         "folder_id": os.getenv("TSS_FOLDER_ID"),
-        "folder_path": os.getenv("TSS_FOLDER_PATH")
+        "folder_path": os.getenv("TSS_FOLDER_PATH"),
     }
 
 
