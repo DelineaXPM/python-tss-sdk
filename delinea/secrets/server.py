@@ -208,6 +208,36 @@ class PasswordGrantAuthorizer(Authorizer):
     """
 
     TOKEN_PATH_URI = "/oauth2/token"
+    PLATFORM_TOKEN_PATH_URI = "/identity/api/oauth2/token/xpmplatform"
+
+    def _detect_server_type(self):
+        """Detects if the server is Secret Server or Platform by health check endpoints, using _check_json_response."""
+        ss_health_url = self.base_url.rstrip("/") + "/api/v1/healthcheck"
+        platform_health_url = self.base_url.rstrip("/") + "/health"
+        if self._check_json_response(ss_health_url):
+            self._server_type = "secret_server"
+            return
+        if self._check_json_response(platform_health_url):
+            self._server_type = "platform"
+            return
+        raise SecretServerError("Unable to detect server type via health check endpoints.")
+
+    def _check_json_response(self, url):
+        """Python equivalent of Go checkJSONResponse for health check detection."""
+        try:
+            resp = requests.get(url, timeout=60)
+        except Exception:
+            return False
+        try:
+            body = resp.content
+        except Exception:
+            return False
+        try:
+            data = resp.json()
+            healthy = data.get("Healthy", False)
+            return healthy
+        except Exception:
+            return b"Healthy" in body or b"healthy" in body
 
     @staticmethod
     def get_access_grant(token_url, grant_request):
@@ -241,18 +271,49 @@ class PasswordGrantAuthorizer(Authorizer):
         ):
             return
         else:
-            self.access_grant = self.get_access_grant(
-                self.token_url, self.grant_request
-            )
-            self.access_grant_refreshed = datetime.now()
+            # Detect server type if not already done
+            if not hasattr(self, "_server_type"):
+                self._detect_server_type()
+            # Decide token_path_uri if not provided
+            if not self.token_path_uri:
+                if self._server_type == "secret_server":
+                    self.token_path_uri = self.TOKEN_PATH_URI
+                elif self._server_type == "platform":
+                    self.token_path_uri = self.PLATFORM_TOKEN_PATH_URI
+                else:
+                    raise SecretServerError("Unknown server type for token request.")
+            if self._server_type == "secret_server":
+                token_url = self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                grant_request = {
+                    "username": self.username,
+                    "password": self.password,
+                    "grant_type": "password",
+                }
+                if hasattr(self, "domain") and self.domain:
+                    grant_request["domain"] = self.domain
+                self.access_grant = self.get_access_grant(token_url, grant_request)
+                self.access_grant_refreshed = datetime.now()
+            elif self._server_type == "platform":
+                token_url = self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                grant_request = {
+                    "client_id": self.username,
+                    "client_secret": self.password,
+                    "grant_type": "client_credentials",
+                    "scope": "xpmheadless",
+                }
+                self.access_grant = self.get_access_grant(token_url, grant_request)
+                self.access_grant_refreshed = datetime.now()
+            else:
+                raise SecretServerError("Unknown server type for token request.")
 
-    def __init__(self, base_url, username, password, token_path_uri=TOKEN_PATH_URI):
-        self.token_url = base_url.rstrip("/") + "/" + token_path_uri.strip("/")
-        self.grant_request = {
-            "username": username,
-            "password": password,
-            "grant_type": "password",
-        }
+    def __init__(self, base_url, username, password, token_path_uri=None, domain=None):
+        self.base_url = base_url.rstrip("/")
+        self.username = username
+        self.password = password
+        self.domain = domain
+        self.token_path_uri = token_path_uri  # May be None, will decide in _refresh
+        self.token_url = None
+        self.grant_request = None
 
     def get_access_token(self):
         self._refresh()
@@ -268,10 +329,9 @@ class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
         username,
         domain,
         password,
-        token_path_uri=PasswordGrantAuthorizer.TOKEN_PATH_URI,
+        token_path_uri=None,
     ):
-        super().__init__(base_url, username, password, token_path_uri=token_path_uri)
-        self.grant_request["domain"] = domain
+        super().__init__(base_url, username, password, token_path_uri=token_path_uri, domain=domain)
 
 
 class SecretServer:
@@ -317,11 +377,11 @@ class SecretServer:
         return self.authorizer.headers()
 
     def __init__(
-        self,
-        base_url,
-        authorizer: Authorizer,
-        api_path_uri=API_PATH_URI,
-    ):
+            self,
+            base_url,
+            authorizer: Authorizer,
+            api_path_uri=API_PATH_URI,
+        ):
         """
         :param base_url: The base URL e.g. ``http://localhost/SecretServer``
         :type base_url: str
@@ -330,10 +390,40 @@ class SecretServer:
         :param api_path_uri: Defaults to ``/api/v1``
         :type api_path_uri: str
         """
-
         self.base_url = base_url.rstrip("/")
+        self.platform_url = self.base_url
         self.authorizer = authorizer
-        self.api_url = f"{self.base_url}/{api_path_uri.strip('/')}"
+        self._api_path_uri = api_path_uri
+
+    @property
+    def api_url(self):
+        return f"{self.base_url}/{self._api_path_uri.strip('/')}"
+    
+    def ensure_vault_url(self):
+        """For platform, fetch and set the vault URL before making API calls."""
+        # Only needed for platform scenario
+        if hasattr(self.authorizer, "_server_type") and self.authorizer._server_type == "platform":
+            if not hasattr(self, "_vault_url_fetched") or not self._vault_url_fetched:
+                access_token = self.authorizer.get_access_token()
+                vaults_endpoint = self.platform_url + "/vaultbroker/api/vaults"
+                headers = {"Authorization": f"Bearer {access_token}"}
+                resp = requests.get(vaults_endpoint, headers=headers, timeout=60)
+                if resp.status_code != 200:
+                    raise SecretServerError(f"Failed to fetch vault details: HTTP {resp.status_code} - {resp.text}")
+                try:
+                    data = resp.json()
+                except Exception as ex:
+                    raise SecretServerError(f"Failed to parse vault details: {ex}")
+                for vault in data.get("vaults", []):
+                    if vault.get("isDefault") and vault.get("isActive"):
+                        conn = vault.get("connection", {})
+                        url = conn.get("url")
+                        if url:
+                            self.base_url = url.rstrip("/")
+                            self._vault_url_fetched = True
+                            return
+                raise SecretServerError("No configured default and active vault found in vault details.")
+
 
     def get_secret_json(self, id, query_params=None):
         """Gets a Secret from Secret Server
@@ -349,18 +439,20 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
+        headers=self.headers()
+        self.ensure_vault_url()
         endpoint_url = f"{self.api_url}/secrets/{id}"
 
         if query_params is None:
             return self.process(
-                requests.get(endpoint_url, headers=self.headers(), timeout=60)
+                requests.get(endpoint_url, headers=headers, timeout=60)
             ).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
-                    headers=self.headers(),
+                    headers=headers,
                     timeout=60,
                 )
             ).text
@@ -379,19 +471,21 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
+        headers=self.headers()
+        self.ensure_vault_url()
         endpoint_url = f"{self.api_url}/folders/{id}"
 
         if get_all_children:
             query_params["getAllChildren"] = "true"
 
         if query_params is None:
-            return self.process(requests.get(endpoint_url, headers=self.headers())).text
+            return self.process(requests.get(endpoint_url, headers=headers)).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
-                    headers=self.headers(),
+                    headers=headers,
                 )
             ).text
 
@@ -520,18 +614,20 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
+        headers=self.headers()
+        self.ensure_vault_url()
         endpoint_url = f"{self.api_url}/secrets"
 
         if query_params is None:
             return self.process(
-                requests.get(endpoint_url, headers=self.headers(), timeout=60)
+                requests.get(endpoint_url, headers=headers, timeout=60)
             ).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
-                    headers=self.headers(),
+                    headers=headers,
                     timeout=60,
                 )
             ).text
@@ -548,16 +644,18 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
+        headers=self.headers()
+        self.ensure_vault_url()
         endpoint_url = f"{self.api_url}/folders/lookup"
 
         if query_params is None:
-            return self.process(requests.get(endpoint_url, headers=self.headers())).text
+            return self.process(requests.get(endpoint_url, headers=headers)).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
-                    headers=self.headers(),
+                    headers=headers,
                 )
             ).text
 
@@ -573,12 +671,13 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
-
+        headers=self.headers()
+        self.ensure_vault_url()
         params = {"filter.folderId": folder_id}
         endpoint_url = f"{self.api_url}/secrets/search-total"
         params["take"] = self.process(
             requests.get(
-                endpoint_url, params=params, headers=self.headers(), timeout=60
+                endpoint_url, params=params, headers=headers, timeout=60
             )
         ).text
         response = self.search_secrets(query_params=params)
@@ -605,7 +704,8 @@ class SecretServer:
         :raise: :class:`SecretServerError` when the REST API call fails for
                 any other reason
         """
-
+        headers=self.headers()
+        self.ensure_vault_url()
         params = {
             "filter.parentFolderId": folder_id,
             "filter.limitToDirectDescendents": True,
@@ -614,7 +714,7 @@ class SecretServer:
         endpoint_url = f"{self.api_url}/folders/lookup"
 
         params["take"] = self.process(
-            requests.get(endpoint_url, params=params, headers=self.headers())
+            requests.get(endpoint_url, params=params, headers=headers)
         ).json()["total"]
         # Handle result of zero child folders
         if params["take"] != 0:
@@ -651,12 +751,12 @@ class SecretServerV0(SecretServer):
         username,
         password,
         api_path_uri=SecretServer.API_PATH_URI,
-        token_path_uri=PasswordGrantAuthorizer.TOKEN_PATH_URI,
+        token_path_uri=None,
     ):
         super().__init__(
             base_url,
             PasswordGrantAuthorizer(
-                f"{base_url}/{token_path_uri.strip('/')}", username, password
+                f"{base_url}", username, password, token_path_uri
             ),
             api_path_uri,
         )
@@ -676,5 +776,13 @@ class SecretServerCloud(SecretServer):
     DEFAULT_TLD = "com"
     URL_TEMPLATE = "https://{}.secretservercloud.{}"
 
-    def __init__(self, tenant, authorizer: Authorizer, tld=DEFAULT_TLD):
-        super().__init__(self.URL_TEMPLATE.format(tenant, tld), authorizer)
+    def __init__(self, tenant=None, authorizer=None, tld=DEFAULT_TLD, base_url=None):
+        if authorizer is None or not isinstance(authorizer, Authorizer):
+            raise ValueError("authorizer must be provided and must be of type Authorizer")
+        if tenant:
+            url = self.URL_TEMPLATE.format(tenant, tld)
+        elif base_url:
+            url = base_url.rstrip("/")
+        else:
+            raise ValueError("Must provide either tenant or base_url")
+        super().__init__(url, authorizer)
