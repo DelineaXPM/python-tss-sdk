@@ -198,8 +198,9 @@ class AccessTokenAuthorizer(Authorizer):
     def get_access_token(self):
         return self.access_token
 
-    def __init__(self, access_token):
+    def __init__(self, access_token, server_type='secret_server'):
         self.access_token = access_token
+        self._server_type = server_type.lower()
 
 
 class PasswordGrantAuthorizer(Authorizer):
@@ -283,7 +284,7 @@ class PasswordGrantAuthorizer(Authorizer):
                 else:
                     raise SecretServerError("Unknown server type for token request.")
             if self._server_type == "secret_server":
-                token_url = self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                self.token_url = self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
                 grant_request = {
                     "username": self.username,
                     "password": self.password,
@@ -291,17 +292,17 @@ class PasswordGrantAuthorizer(Authorizer):
                 }
                 if hasattr(self, "domain") and self.domain:
                     grant_request["domain"] = self.domain
-                self.access_grant = self.get_access_grant(token_url, grant_request)
+                self.access_grant = self.get_access_grant(self.token_url, grant_request)
                 self.access_grant_refreshed = datetime.now()
             elif self._server_type == "platform":
-                token_url = self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                self.token_url = self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
                 grant_request = {
                     "client_id": self.username,
                     "client_secret": self.password,
                     "grant_type": "client_credentials",
                     "scope": "xpmheadless",
                 }
-                self.access_grant = self.get_access_grant(token_url, grant_request)
+                self.access_grant = self.get_access_grant(self.token_url, grant_request)
                 self.access_grant_refreshed = datetime.now()
             else:
                 raise SecretServerError("Unknown server type for token request.")
