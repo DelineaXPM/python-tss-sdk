@@ -22,9 +22,9 @@ def env_vars():
 @pytest.fixture
 def platform_env_vars():
     return {
-        "username": os.getenv("TSS_PLATFORM_USERNAME"),
-        "password": os.getenv("TSS_PLATFORM_PASSWORD"),
-        "base_url": os.getenv("TSS_PLATFORM_BASE_URL"),
+        "platform_username": os.getenv("TSS_PLATFORM_USERNAME"),
+        "platform_password": os.getenv("TSS_PLATFORM_PASSWORD"),
+        "platform_base_url": os.getenv("TSS_PLATFORM_BASE_URL"),
         "secret_id": os.getenv("TSS_SECRET_ID"),
         "secret_path": os.getenv("TSS_SECRET_PATH"),
         "folder_id": os.getenv("TSS_FOLDER_ID"),
@@ -46,9 +46,9 @@ def platform_authorizer(platform_env_vars):
     from delinea.secrets.server import PasswordGrantAuthorizer
 
     return PasswordGrantAuthorizer(
-        platform_env_vars["base_url"],
-        platform_env_vars["username"],
-        platform_env_vars["password"],
+        platform_env_vars["platform_base_url"],
+        platform_env_vars["platform_username"],
+        platform_env_vars["platform_password"],
     )
 
 
