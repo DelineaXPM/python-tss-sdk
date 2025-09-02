@@ -21,9 +21,9 @@ def env_vars():
 @pytest.fixture
 def platform_env_vars():
     return {
-        "username": os.getenv("PLATFORM_USERNAME"),
-        "password": os.getenv("PLATFORM_PASSWORD"),
-        "base_url": os.getenv("PLATFORM_BASEURL"),
+        "username": os.getenv("TSS_PLATFORM_USERNAME"),
+        "password": os.getenv("TSS_PLATFORM_PASSWORD"),
+        "base_url": os.getenv("TSS_PLATFORM_BASE_URL"),
         "secret_id": os.getenv("TSS_SECRET_ID"),
         "secret_path": os.getenv("TSS_SECRET_PATH"),
         "folder_id": os.getenv("TSS_FOLDER_ID"),
