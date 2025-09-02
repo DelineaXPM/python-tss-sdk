@@ -82,7 +82,7 @@ def test_server_child_folder_ids_by_folderid(env_vars, secret_server):
 
 def test_platform_bad_url(platform_env_vars, platform_authorizer):
     bad_server = SecretServer(
-        f"{platform_env_vars['base_url']}/nonexistent",
+        f"{platform_env_vars['platform_base_url']}/nonexistent",
         platform_authorizer,
     )
     with pytest.raises(SecretServerError):
@@ -93,17 +93,17 @@ def test_platform_token_url(platform_env_vars, platform_authorizer):
     platform_authorizer.get_access_token()
     assert (
         platform_authorizer.token_url
-        == f"{platform_env_vars['base_url']}/identity/api/oauth2/token/xpmplatform"
+        == f"{platform_env_vars['platform_base_url']}/identity/api/oauth2/token/xpmplatform"
     )
 
 
 def test_platform_api_url(platform_server, platform_env_vars):
-    assert platform_server.api_url == f"{platform_env_vars['base_url']}/api/v1"
+    assert platform_server.api_url == f"{platform_env_vars['platform_base_url']}/api/v1"
 
 
 def test_platform_access_token_authorizer(platform_env_vars, platform_authorizer):
     assert SecretServer(
-        platform_env_vars["base_url"],
+        platform_env_vars["platform_base_url"],
         AccessTokenAuthorizer(platform_authorizer.get_access_token(), "platform"),
     ).get_secret(platform_env_vars["secret_id"])["id"] == int(
         platform_env_vars["secret_id"]
