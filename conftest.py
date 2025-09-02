@@ -61,4 +61,4 @@ def secret_server(env_vars, authorizer):
 def platform_server(platform_env_vars, platform_authorizer):
     from delinea.secrets.server import SecretServer
 
-    return SecretServer(platform_env_vars["base_url"], platform_authorizer)
+    return SecretServer(platform_env_vars["platform_base_url"], platform_authorizer)
