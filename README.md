@@ -5,7 +5,12 @@
 
 ![PyPI Version](https://img.shields.io/pypi/v/python-tss-sdk) ![License](https://img.shields.io/github/license/DelineaXPM/python-tss-sdk) ![Python Versions](https://img.shields.io/pypi/pyversions/python-tss-sdk)
 
-The [Delinea](https://delinea.com/) [Secret Server](https://delinea.com/products/secret-server/) Python SDK contains classes that interact with Secret Server via the REST API.
+
+The [Delinea](https://delinea.com/) [Secret Server](https://delinea.com/products/secret-server/) Python SDK contains classes that interact with Secret Server via their REST APIs.
+
+## Authentication Support
+
+This SDK supports both Secret Server and Platform authentication. You can use the same authorizer classes for both systems and instantiate either a Secret Server or Platform client as needed. For Secret Server, you need to create an application user with the required permissions for authentication. For Platform, you need to create a service user with the appropriate permissions for authentication.
 
 ## Install
 
@@ -26,17 +31,26 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 
 #### Password Authorization
 
-If using traditional `username` and `password` authentication to log in to your Secret Server, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
+If using traditional `username` and `password` authentication to log in to your Secret Server either directly or through Platform, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token` or `/identity/api/oauth2/token/xpmplatform`, depending on whether a secret server or platform is used for authentication.
 
+##### With Secret Server
 ```python
 from delinea.secrets.server import PasswordGrantAuthorizer
 
 authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password")")
 ```
 
+##### With Platform
+
+```python
+from delinea.secrets.server import PasswordGrantAuthorizer
+
+authorizer = PasswordGrantAuthorizer("https://platform.delinea.app", os.getenv("myusername"), os.getenv("password"))
+```
+
 #### Domain Authorization
 
-To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`.
+To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`. It is applicable only when authentication is done using a secret server.
 
 ```python
 from delinea.secrets.server import DomainPasswordGrantAuthorizer
@@ -46,7 +60,7 @@ authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", os.g
 
 #### Access Token Authorization
 
-If you already have an `access_token`, you can pass directly via the `AccessTokenAuthorizer`.
+If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`.
 
 ```python
 from delinea.secrets.server import AccessTokenAuthorizer
@@ -56,18 +70,33 @@ authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
 
 ## Secret Server Cloud
 
-The SDK API requires an `Authorizer` and a `tenant`.
+The SDK API requires an `Authorizer` and either a `tenant` or a `base_url`. In the case of plaform authentication, only a `base_url` is supported.
 
 `tenant` simplifies the configuration when using Secret Server Cloud by assuming the default folder structure and creating the _base URL_ from a template that takes the `tenant` and an optional top-level domain (TLD) that defaults to `com`, as parameters.
 
 ### Useage
 
-Instantiate the `SecretServerCloud` class with `tenant` and an `Authorizer` (optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
+Instantiate the `SecretServerCloud` class with `tenant` or `base_url`, along with an `Authorizer` (when providing `tenant`, yoou may optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
 
+##### With Secret Server
 ```python
 from delinea.secrets.server import SecretServerCloud
 
 secret_server = SecretServerCloud(tenant=tenant, authorizer=authorizer)
+
+secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
+
+serverSecret = ServerSecret(**secret)
+
+print(f"username: {serverSecret.fields['username'].value}\npassword: {serverSecret.fields['password'].value}")
+```
+
+##### With Platform
+
+```python
+from delinea.secrets.server import SecretServerCloud
+
+secret_server = SecretServerCloud(authorizer=authorizer, base_url="https://platform.delinea.app")
 
 secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
 
@@ -86,10 +115,19 @@ The SDK API also contains a `Secret` `@dataclass` containing a subset of the Sec
 
 To instantiate the `SecretServer` class, it requires a `base_url`, an `Authorizer` object (see above), and an optional `api_path_uri` (defaults to `"/api/v1"`)
 
+##### With Secret Server
 ```python
 from delinea.secrets.server import SecretServer
 
 secret_server = SecretServer("https://hostname/SecretServer", authorizer=authorizer)
+```
+
+##### With Platform
+
+```python
+from delinea.secrets.server import SecretServer
+
+secret_server = SecretServer(base_url="https://platform.delinea.app", authorizer=authorizer)
 ```
 
 Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
