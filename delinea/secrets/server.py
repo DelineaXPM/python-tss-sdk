@@ -183,7 +183,7 @@ class Authorizer(ABC):
         """Detects if the server is Secret Server or Platform by health check endpoints."""
         secret_server_endpoint = base_url.rstrip("/") + "/api/v1/healthcheck"
         platform_endpoint = base_url.rstrip("/") + "/health"
-        
+
         if self._validate_health_endpoint(secret_server_endpoint):
             self._server_type = "secret_server"
             return
@@ -200,12 +200,12 @@ class Authorizer(ABC):
             response = requests.get(url, timeout=60)
         except Exception:
             return False
-        
+
         try:
             response_body = response.content
         except Exception:
             return False
-            
+
         try:
             json_data = response.json()
             return json_data.get("Healthy", False)
