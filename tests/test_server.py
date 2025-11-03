@@ -37,7 +37,10 @@ def test_api_url(secret_server, env_vars):
 def test_access_token_authorizer(env_vars, authorizer):
     assert SecretServer(
         f"https://{env_vars['tenant']}.secretservercloud.com/",
-        AccessTokenAuthorizer(authorizer.get_access_token()),
+        AccessTokenAuthorizer(
+            authorizer.get_access_token(),
+            f"https://{env_vars['tenant']}.secretservercloud.com/",
+        ),
     ).get_secret(env_vars["secret_id"])["id"] == int(env_vars["secret_id"])
 
 
@@ -104,7 +107,10 @@ def test_platform_api_url(platform_server, platform_env_vars):
 def test_platform_access_token_authorizer(platform_env_vars, platform_authorizer):
     assert SecretServer(
         platform_env_vars["platform_base_url"],
-        AccessTokenAuthorizer(platform_authorizer.get_access_token(), "platform"),
+        AccessTokenAuthorizer(
+            platform_authorizer.get_access_token(),
+            platform_env_vars["platform_base_url"],
+        ),
     ).get_secret(platform_env_vars["secret_id"])["id"] == int(
         platform_env_vars["secret_id"]
     )

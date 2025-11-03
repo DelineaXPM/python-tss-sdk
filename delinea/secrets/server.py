@@ -179,6 +179,39 @@ class Authorizer(ABC):
             **existing_headers,
         }
 
+    def _perform_server_detection(self, base_url):
+        """Detects if the server is Secret Server or Platform by health check endpoints."""
+        secret_server_endpoint = base_url.rstrip("/") + "/api/v1/healthcheck"
+        platform_endpoint = base_url.rstrip("/") + "/health"
+
+        if self._validate_health_endpoint(secret_server_endpoint):
+            self._server_type = "secret_server"
+            return
+        if self._validate_health_endpoint(platform_endpoint):
+            self._server_type = "platform"
+            return
+        raise SecretServerError(
+            "Unable to detect server type via health check endpoints."
+        )
+
+    def _validate_health_endpoint(self, url):
+        """Validates if an endpoint returns healthy status."""
+        try:
+            response = requests.get(url, timeout=60)
+        except Exception:
+            return False
+
+        try:
+            response_body = response.content
+        except Exception:
+            return False
+
+        try:
+            json_data = response.json()
+            return json_data.get("Healthy", False)
+        except Exception:
+            return b"Healthy" in response_body or b"healthy" in response_body
+
     @abstractmethod
     def get_access_token(self):
         """Returns the access_token from a Grant Request"""
@@ -198,9 +231,10 @@ class AccessTokenAuthorizer(Authorizer):
     def get_access_token(self):
         return self.access_token
 
-    def __init__(self, access_token, server_type="secret_server"):
+    def __init__(self, access_token, base_url):
         self.access_token = access_token
-        self._server_type = server_type.lower()
+        self.base_url = base_url.rstrip("/")
+        self._perform_server_detection(self.base_url)
 
 
 class PasswordGrantAuthorizer(Authorizer):
@@ -210,37 +244,6 @@ class PasswordGrantAuthorizer(Authorizer):
 
     TOKEN_PATH_URI = "/oauth2/token"
     PLATFORM_TOKEN_PATH_URI = "/identity/api/oauth2/token/xpmplatform"
-
-    def _detect_server_type(self):
-        """Detects if the server is Secret Server or Platform by health check endpoints, using _check_json_response."""
-        ss_health_url = self.base_url.rstrip("/") + "/api/v1/healthcheck"
-        platform_health_url = self.base_url.rstrip("/") + "/health"
-        if self._check_json_response(ss_health_url):
-            self._server_type = "secret_server"
-            return
-        if self._check_json_response(platform_health_url):
-            self._server_type = "platform"
-            return
-        raise SecretServerError(
-            "Unable to detect server type via health check endpoints."
-        )
-
-    def _check_json_response(self, url):
-        """Python equivalent of Go checkJSONResponse for health check detection."""
-        try:
-            resp = requests.get(url, timeout=60)
-        except Exception:
-            return False
-        try:
-            body = resp.content
-        except Exception:
-            return False
-        try:
-            data = resp.json()
-            healthy = data.get("Healthy", False)
-            return healthy
-        except Exception:
-            return b"Healthy" in body or b"healthy" in body
 
     @staticmethod
     def get_access_grant(token_url, grant_request):
@@ -276,7 +279,7 @@ class PasswordGrantAuthorizer(Authorizer):
         else:
             # Detect server type if not already done
             if not hasattr(self, "_server_type"):
-                self._detect_server_type()
+                self._perform_server_detection(self.base_url)
             # Decide token_path_uri if not provided
             if not self.token_path_uri:
                 if self._server_type == "secret_server":

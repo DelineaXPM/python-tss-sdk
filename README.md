@@ -37,7 +37,7 @@ If using traditional `username` and `password` authentication to log in to your 
 ```python
 from delinea.secrets.server import PasswordGrantAuthorizer
 
-authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password")")
+authorizer = PasswordGrantAuthorizer("https://hostname/SecretServer", os.getenv("myusername"), os.getenv("password"))
 ```
 
 ##### With Platform
@@ -60,12 +60,21 @@ authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", os.g
 
 #### Access Token Authorization
 
-If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`.
+If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`. The `AccessTokenAuthorizer` requires a `access_token` and `base_url`.
+
+##### With Secret Server
+```python
+from delinea.secrets.server import AccessTokenAuthorizer
+
+authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...", "https://hostname/SecretServer")
+```
+
+##### With Platform
 
 ```python
 from delinea.secrets.server import AccessTokenAuthorizer
 
-authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...")
+authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...", "https://platform.delinea.app")
 ```
 
 ## Secret Server Cloud
