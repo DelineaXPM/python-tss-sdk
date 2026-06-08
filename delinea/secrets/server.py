@@ -19,6 +19,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from threading import Lock
 
 import requests
 
@@ -164,6 +165,19 @@ class SecretServerServiceError(SecretServerError):
 class Authorizer(ABC):
     """Main abstract base class for all Authorizer access methods."""
 
+    # Process-scoped cache mapping a normalized base_url to its detected server
+    # type ("secret_server" | "platform"). Shared across all Authorizer
+    # subclasses so the health-check probe pair fires once per base_url per
+    # process. Guarded by ``_server_type_cache_lock``.
+    _server_type_cache = {}
+    _server_type_cache_lock = Lock()
+
+    @classmethod
+    def _clear_server_type_cache(cls):
+        """Clear the process-scoped server-detection cache (test hook)."""
+        with Authorizer._server_type_cache_lock:
+            Authorizer._server_type_cache.clear()
+
     @staticmethod
     def add_bearer_token_authorization_header(bearer_token, existing_headers={}):
         """Adds an HTTP `Authorization` header containing the `Bearer` token
@@ -180,19 +194,42 @@ class Authorizer(ABC):
         }
 
     def _perform_server_detection(self, base_url):
-        """Detects if the server is Secret Server or Platform by health check endpoints."""
-        secret_server_endpoint = base_url.rstrip("/") + "/api/v1/healthcheck"
-        platform_endpoint = base_url.rstrip("/") + "/health"
+        """Detect whether the server is Secret Server or Platform via health
+        check endpoints, using a process-scoped cache.
 
-        if self._validate_health_endpoint(secret_server_endpoint):
-            self._server_type = "secret_server"
+        The detected type is cached per normalized ``base_url`` on the
+        ``Authorizer`` base class and shared across all subclasses, so the
+        ``/api/v1/healthcheck`` + ``/health`` probe pair fires only once per
+        ``base_url`` per process. The cache is read/written under
+        ``_server_type_cache_lock`` for thread safety, but the network probe
+        itself runs OUTSIDE the lock; detection is idempotent, so a rare
+        double-probe under a race is harmless. Only successful detections are
+        cached -- failures re-probe on the next construction.
+
+        On both cache hits and fresh probes the per-instance ``_server_type``
+        attribute is set, because callers (``SecretServer.ensure_vault_url``
+        and ``PasswordGrantAuthorizer._refresh``) read ``self._server_type``.
+        """
+        key = base_url.rstrip("/")
+
+        with Authorizer._server_type_cache_lock:
+            cached = Authorizer._server_type_cache.get(key)
+        if cached is not None:
+            self._server_type = cached
             return
-        if self._validate_health_endpoint(platform_endpoint):
-            self._server_type = "platform"
-            return
-        raise SecretServerError(
-            "Unable to detect server type via health check endpoints."
-        )
+
+        if self._validate_health_endpoint(key + "/api/v1/healthcheck"):
+            detected = "secret_server"
+        elif self._validate_health_endpoint(key + "/health"):
+            detected = "platform"
+        else:
+            raise SecretServerError(
+                "Unable to detect server type via health check endpoints."
+            )
+
+        self._server_type = detected
+        with Authorizer._server_type_cache_lock:
+            Authorizer._server_type_cache.setdefault(key, detected)
 
     def _validate_health_endpoint(self, url):
         """Validates if an endpoint returns healthy status."""
