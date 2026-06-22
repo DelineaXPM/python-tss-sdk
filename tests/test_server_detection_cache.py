@@ -21,7 +21,6 @@ from delinea.secrets.server import (
     SecretServerError,
 )
 
-
 SECRET_SERVER_HEALTH = "/api/v1/healthcheck"
 PLATFORM_HEALTH = "/health"
 
@@ -209,3 +208,106 @@ def test_concurrent_construction_thread_safe(monkeypatch):
     # exactly 1).
     assert counter["rounds"] >= 1
     assert counter["rounds"] <= 20
+
+
+# Behavior 7: an explicit server_type override skips detection entirely (no probe).
+@pytest.mark.parametrize("server_type", ["platform", "secret_server"])
+def test_explicit_server_type_skips_probe(monkeypatch, server_type):
+    base_url = "https://anything.example.com"
+    # Every health endpoint is unhealthy: if any probe fired, detection would
+    # raise. It must not, because the override bypasses probing.
+    fake_get, counter = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    inst = AccessTokenAuthorizer("tok", base_url, server_type=server_type)
+
+    assert inst._server_type == server_type
+    assert counter["total"] == 0  # zero probes -> no WAF burst
+    # The override seeds the shared cache for subsequent callers.
+    assert Authorizer._server_type_cache[base_url] == server_type
+
+
+# Behavior 8: the override is normalized (case/whitespace-insensitive).
+def test_explicit_server_type_is_normalized(monkeypatch):
+    fake_get, counter = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    inst = AccessTokenAuthorizer(
+        "tok", "https://x.example.com", server_type="  Platform "
+    )
+
+    assert inst._server_type == "platform"
+    assert counter["total"] == 0
+
+
+# Behavior 9: an invalid override raises and issues no probe.
+def test_invalid_server_type_raises(monkeypatch):
+    fake_get, counter = make_probe_counter({PLATFORM_HEALTH})
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", "https://x.example.com", server_type="bogus")
+
+    assert counter["total"] == 0
+
+
+# Behavior 10: PasswordGrantAuthorizer with an override never probes in _refresh.
+def test_password_grant_override_skips_detection(monkeypatch):
+    base_url = "https://platform.example.com"
+    fake_get, counter = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    grant = PasswordGrantAuthorizer(base_url, "user", "pass", server_type="platform")
+    assert grant._server_type == "platform"
+
+    try:
+        # The grant POST will fail offline, but detection must not have probed.
+        grant.get_access_token()
+    except Exception:
+        pass
+
+    assert counter["total"] == 0
+    # Platform token endpoint was selected without any health probe.
+    assert grant.token_path_uri == PasswordGrantAuthorizer.PLATFORM_TOKEN_PATH_URI
+
+
+# Behavior 11: the cache is bounded; the least-recently-used entry is evicted.
+def test_cache_is_bounded_lru(monkeypatch):
+    fake_get, _ = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    maxsize = Authorizer._SERVER_TYPE_CACHE_MAXSIZE
+
+    # Fill exactly to capacity using the override path (no network needed).
+    for i in range(maxsize):
+        AccessTokenAuthorizer(
+            "tok", f"https://host-{i}.example.com", server_type="platform"
+        )
+    assert len(Authorizer._server_type_cache) == maxsize
+
+    first_key = "https://host-0.example.com"
+    # Touch host-0 so it becomes most-recently-used and survives the next insert.
+    Authorizer._get_cached_server_type(first_key)
+
+    # One more distinct URL overflows the cache by one entry.
+    AccessTokenAuthorizer("tok", "https://overflow.example.com", server_type="platform")
+
+    assert len(Authorizer._server_type_cache) == maxsize
+    assert first_key in Authorizer._server_type_cache  # survived (recently used)
+    assert "https://host-1.example.com" not in Authorizer._server_type_cache  # evicted
+
+
+# Behavior 12: the public clear-cache method forces re-detection.
+def test_public_clear_cache(monkeypatch):
+    base_url = "https://platform.example.com"
+    fake_get, counter = make_probe_counter({PLATFORM_HEALTH})
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    AccessTokenAuthorizer("tok", base_url)
+    assert counter["rounds"] == 1
+
+    Authorizer.clear_server_type_cache()
+    assert base_url not in Authorizer._server_type_cache
+
+    AccessTokenAuthorizer("tok", base_url)  # cache empty -> probes again
+    assert counter["rounds"] == 2
