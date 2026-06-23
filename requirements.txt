@@ -1,4 +1,4 @@
-requests==2.33.0
+requests==2.34.2 # pinned to address CVE-2026-25645 (2.33.0 was never published)
 tox
 pytest
 python-dotenv

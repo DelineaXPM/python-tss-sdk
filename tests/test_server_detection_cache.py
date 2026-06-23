@@ -210,7 +210,8 @@ def test_concurrent_construction_thread_safe(monkeypatch):
     assert counter["rounds"] <= 20
 
 
-# Behavior 7: an explicit server_type override skips detection entirely (no probe).
+# Behavior 7: an explicit server_type override skips detection entirely (no probe)
+# and is per-instance only -- it must NOT seed the shared process cache.
 @pytest.mark.parametrize("server_type", ["platform", "secret_server"])
 def test_explicit_server_type_skips_probe(monkeypatch, server_type):
     base_url = "https://anything.example.com"
@@ -223,8 +224,9 @@ def test_explicit_server_type_skips_probe(monkeypatch, server_type):
 
     assert inst._server_type == server_type
     assert counter["total"] == 0  # zero probes -> no WAF burst
-    # The override seeds the shared cache for subsequent callers.
-    assert Authorizer._server_type_cache[base_url] == server_type
+    # The unverified override must NOT be written to the shared cache (otherwise
+    # it could poison auto-detection for other callers using the same base_url).
+    assert base_url not in Authorizer._server_type_cache
 
 
 # Behavior 8: the override is normalized (case/whitespace-insensitive).
@@ -273,16 +275,17 @@ def test_password_grant_override_skips_detection(monkeypatch):
 
 # Behavior 11: the cache is bounded; the least-recently-used entry is evicted.
 def test_cache_is_bounded_lru(monkeypatch):
-    fake_get, _ = make_probe_counter(set())
+    # Every base_url detects as platform (healthy /health) so each distinct URL
+    # seeds one verified cache entry. Only verified detections populate the
+    # shared cache, so the cache must be filled via detection (not overrides).
+    fake_get, _ = make_probe_counter({PLATFORM_HEALTH})
     monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
 
     maxsize = Authorizer._SERVER_TYPE_CACHE_MAXSIZE
 
-    # Fill exactly to capacity using the override path (no network needed).
+    # Fill exactly to capacity via auto-detection.
     for i in range(maxsize):
-        AccessTokenAuthorizer(
-            "tok", f"https://host-{i}.example.com", server_type="platform"
-        )
+        AccessTokenAuthorizer("tok", f"https://host-{i}.example.com")
     assert len(Authorizer._server_type_cache) == maxsize
 
     first_key = "https://host-0.example.com"
@@ -290,11 +293,33 @@ def test_cache_is_bounded_lru(monkeypatch):
     Authorizer._get_cached_server_type(first_key)
 
     # One more distinct URL overflows the cache by one entry.
-    AccessTokenAuthorizer("tok", "https://overflow.example.com", server_type="platform")
+    AccessTokenAuthorizer("tok", "https://overflow.example.com")
 
     assert len(Authorizer._server_type_cache) == maxsize
     assert first_key in Authorizer._server_type_cache  # survived (recently used)
     assert "https://host-1.example.com" not in Authorizer._server_type_cache  # evicted
+
+
+# Behavior 13: an unverified override must not poison auto-detection for a later
+# caller that relies on probing for the same base_url.
+def test_override_does_not_poison_autodetect(monkeypatch):
+    base_url = "https://platform.example.com"
+    # The server is really a platform (healthy /health); probing would detect it.
+    fake_get, counter = make_probe_counter({PLATFORM_HEALTH})
+    monkeypatch.setattr("delinea.secrets.server.requests.get", fake_get)
+
+    # First caller supplies a WRONG override and issues no probe.
+    poisoner = AccessTokenAuthorizer("tok", base_url, server_type="secret_server")
+    assert poisoner._server_type == "secret_server"
+    assert counter["total"] == 0
+    assert base_url not in Authorizer._server_type_cache  # not seeded
+
+    # Second caller relies on auto-detection -> must probe and get the real type,
+    # NOT the poisoned override value.
+    detected = AccessTokenAuthorizer("tok", base_url)
+    assert detected._server_type == "platform"
+    assert counter["rounds"] == 1  # a real probe fired
+    assert Authorizer._server_type_cache[base_url] == "platform"
 
 
 # Behavior 12: the public clear-cache method forces re-detection.

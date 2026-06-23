@@ -256,13 +256,19 @@ class Authorizer(ABC):
     def _perform_server_detection(self, base_url, server_type=None):
         """Resolve whether the server is Secret Server or Platform.
 
-        When an explicit ``server_type`` is supplied the value is validated,
-        cached, and used directly -- NO health-check probe is issued. This is
-        the recommended path for callers that run each lookup in a fresh
-        process (e.g. some Ansible lookup-plugin runtimes) where the
+        When an explicit ``server_type`` is supplied the value is validated
+        and used directly for THIS instance only -- NO health-check probe is
+        issued. This is the recommended path for callers that run each lookup
+        in a fresh process (e.g. some Ansible lookup-plugin runtimes) where the
         process-scoped cache cannot help: skipping detection eliminates the
         unauthenticated ``/api/v1/healthcheck`` + ``/health`` probe burst that
         the Delinea Platform WAF rate-limits to 403.
+
+        An explicit override is deliberately NOT written to the shared
+        process-scoped cache: the override is unverified, so seeding the cache
+        would let a wrong/typo'd value silently poison auto-detection for
+        unrelated callers using the same ``base_url`` in the same process. Only
+        verified probe detections populate the shared cache.
 
         Otherwise the type is detected via the health-check endpoints, using a
         process-scoped cache. The detected type is cached per normalized
@@ -281,9 +287,9 @@ class Authorizer(ABC):
         key = base_url.rstrip("/")
 
         if server_type is not None:
-            detected = self._normalize_server_type(server_type)
-            self._server_type = detected
-            self._cache_server_type(key, detected)
+            # Per-instance only; intentionally NOT seeded into the shared cache
+            # so an unverified override cannot poison auto-detection for others.
+            self._server_type = self._normalize_server_type(server_type)
             return
 
         cached = self._get_cached_server_type(key)
