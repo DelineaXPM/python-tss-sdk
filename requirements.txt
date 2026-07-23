@@ -1,8 +1,8 @@
-requests==2.32.4
+requests==2.34.2 # pinned to address CVE-2026-25645 (2.33.0 was never published); requires Python >= 3.10
 tox
 pytest
 python-dotenv
 flit
 black
-urllib3==2.6.3 # not directly required, pinned by Snyk to avoid a vulnerability
+urllib3==2.7.0 # not directly required, pinned by Snyk to avoid a vulnerability (CVE-2026-44431/44432); requires Python >= 3.10
 zipp==3.23.0 # not directly required, pinned by Snyk to avoid a vulnerability
