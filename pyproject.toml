@@ -9,14 +9,20 @@ author-email = "GitHub@delinea.com"
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11"
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12"
 ]
 description-file = "README.md"
+# BREAKING (consumer-facing): the requests floor was raised from 2.12.5 to 2.34.2
+# to clear CVE-2026-25645 (requests) and its transitive urllib3 advisories for
+# downstream installs, not just CI. requests 2.34.2 requires Python >= 3.10.
 requires = [
-    "requests >= 2.12.5"
+    "requests >= 2.34.2"
 ]
-requires-python=">=3.8"
+# BREAKING (consumer-facing): minimum Python raised from 3.8 to 3.10. The fixed
+# requests/urllib3 releases that clear the flagged CVEs dropped 3.8/3.9 support
+# (both EOL). Consumers on Python 3.8/3.9 must stay on an older SDK release or
+# upgrade their runtime. See work item 741117.
+requires-python=">=3.10"
 dist-name = "python-tss-sdk"
