@@ -24,6 +24,10 @@ from threading import Lock
 
 import requests
 
+# Applied to every HTTP call the SDK makes; ``requests`` has no default
+# timeout, so an omitted value would let a stalled connection hang forever.
+DEFAULT_REQUEST_TIMEOUT = 60
+
 
 @dataclass
 class ServerSecret:
@@ -152,6 +156,7 @@ class SecretServerError(Exception):
 
     def __init__(self, message, response=None, *args, **kwargs):
         self.message = message
+        self.response = response
         super().__init__(*args, **kwargs)
 
 
@@ -312,7 +317,7 @@ class Authorizer(ABC):
     def _validate_health_endpoint(self, url):
         """Validates if an endpoint returns healthy status."""
         try:
-            response = requests.get(url, timeout=60)
+            response = requests.get(url, timeout=DEFAULT_REQUEST_TIMEOUT)
         except Exception:
             return False
 
@@ -373,7 +378,9 @@ class PasswordGrantAuthorizer(Authorizer):
                 other than a valid Access Grant
         """
 
-        response = requests.post(token_url, grant_request, timeout=60)
+        response = requests.post(
+            token_url, grant_request, timeout=DEFAULT_REQUEST_TIMEOUT
+        )
 
         try:  # TSS returns a 200 (OK) containing HTML for some error conditions
             return json.loads(SecretServer.process(response).content)
@@ -391,7 +398,7 @@ class PasswordGrantAuthorizer(Authorizer):
         if (
             hasattr(self, "access_grant")
             and self.access_grant_refreshed
-            + timedelta(seconds=self.access_grant["expires_in"] + seconds_of_drift)
+            + timedelta(seconds=self.access_grant["expires_in"] - seconds_of_drift)
             > datetime.now()
         ):
             return
@@ -514,6 +521,9 @@ class SecretServer:
         if response.status_code >= 200 and response.status_code < 300:
             return response
         if response.status_code >= 400 and response.status_code < 500:
+            # Fallback used when the body is JSON but carries no recognized
+            # message/error key.
+            message = f"HTTP {response.status_code}"
             try:
                 content = json.loads(response.content)
                 if "message" in content:
@@ -564,7 +574,9 @@ class SecretServer:
                 access_token = self.authorizer.get_access_token()
                 vaults_endpoint = self.platform_url + "/vaultbroker/api/vaults"
                 headers = {"Authorization": f"Bearer {access_token}"}
-                resp = requests.get(vaults_endpoint, headers=headers, timeout=60)
+                resp = requests.get(
+                    vaults_endpoint, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
                 if resp.status_code != 200:
                     raise SecretServerError(
                         f"Failed to fetch vault details: HTTP {resp.status_code} - {resp.text}"
@@ -605,7 +617,9 @@ class SecretServer:
 
         if query_params is None:
             return self.process(
-                requests.get(endpoint_url, headers=headers, timeout=60)
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
             ).text
         else:
             return self.process(
@@ -613,7 +627,7 @@ class SecretServer:
                     endpoint_url,
                     params=query_params,
                     headers=headers,
-                    timeout=60,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -639,13 +653,18 @@ class SecretServer:
             query_params["getAllChildren"] = "true"
 
         if query_params is None:
-            return self.process(requests.get(endpoint_url, headers=headers)).text
+            return self.process(
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
+            ).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
                     headers=headers,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -682,7 +701,9 @@ class SecretServer:
                     if query_params is None:
                         item["itemValue"] = self.process(
                             requests.get(
-                                endpoint_url, headers=self.headers(), timeout=60
+                                endpoint_url,
+                                headers=self.headers(),
+                                timeout=DEFAULT_REQUEST_TIMEOUT,
                             )
                         )
                     else:
@@ -691,7 +712,7 @@ class SecretServer:
                                 endpoint_url,
                                 params=query_params,
                                 headers=self.headers(),
-                                timeout=60,
+                                timeout=DEFAULT_REQUEST_TIMEOUT,
                             )
                         )
         return secret
@@ -780,7 +801,9 @@ class SecretServer:
 
         if query_params is None:
             return self.process(
-                requests.get(endpoint_url, headers=headers, timeout=60)
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
             ).text
         else:
             return self.process(
@@ -788,7 +811,7 @@ class SecretServer:
                     endpoint_url,
                     params=query_params,
                     headers=headers,
-                    timeout=60,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -809,13 +832,18 @@ class SecretServer:
         endpoint_url = f"{self.api_url}/folders/lookup"
 
         if query_params is None:
-            return self.process(requests.get(endpoint_url, headers=headers)).text
+            return self.process(
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
+            ).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
                     headers=headers,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -836,7 +864,12 @@ class SecretServer:
         params = {"filter.folderId": folder_id}
         endpoint_url = f"{self.api_url}/secrets/search-total"
         params["take"] = self.process(
-            requests.get(endpoint_url, params=params, headers=headers, timeout=60)
+            requests.get(
+                endpoint_url,
+                params=params,
+                headers=headers,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
         ).text
         response = self.search_secrets(query_params=params)
 
@@ -872,7 +905,12 @@ class SecretServer:
         endpoint_url = f"{self.api_url}/folders/lookup"
 
         params["take"] = self.process(
-            requests.get(endpoint_url, params=params, headers=headers)
+            requests.get(
+                endpoint_url,
+                params=params,
+                headers=headers,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
         ).json()["total"]
         # Handle result of zero child folders
         if params["take"] != 0:
