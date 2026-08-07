@@ -15,18 +15,58 @@ Example:
 """
 
 import json
+import logging
 import re
+import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import Lock
+from urllib.parse import urlsplit
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 # Applied to every HTTP call the SDK makes; ``requests`` has no default
 # timeout, so an omitted value would let a stalled connection hang forever.
 DEFAULT_REQUEST_TIMEOUT = 60
+
+# Cap on how much of a server response body is echoed into an exception
+# message, so a malformed/oversized response cannot flood logs and so
+# exception text stays clearly distinguishable from a full response body.
+_BODY_EXCERPT_LIMIT = 200
+
+
+def _warn_if_insecure(base_url):
+    """Warn when ``base_url`` does not use ``https``.
+
+    Credentials (password / client_secret) and bearer tokens are sent to
+    ``base_url`` in plaintext when the scheme is not ``https``. This only
+    warns today, to preserve compatibility with existing localhost/lab
+    setups that use plain HTTP.
+    TODO(v3.0): reject a non-https ``base_url`` by default, with an explicit
+    opt-out (e.g. ``allow_http=True``) for those setups.
+    """
+    if urlsplit(base_url).scheme.lower() != "https":
+        warnings.warn(
+            f"base_url {base_url!r} does not use https; credentials and "
+            "bearer tokens will be sent unencrypted.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def _safe_body_excerpt(text, limit=_BODY_EXCERPT_LIMIT):
+    """Return a length-capped excerpt of a response body for use in error
+    messages, marked when truncated so it's clearly not the full body."""
+    if text is None:
+        return ""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
 
 
 @dataclass
@@ -157,7 +197,9 @@ class SecretServerError(Exception):
     def __init__(self, message, response=None, *args, **kwargs):
         self.message = message
         self.response = response
-        super().__init__(*args, **kwargs)
+        # Pass message through so str(exception) is populated for default
+        # traceback/log output, not just the .message attribute.
+        super().__init__(message, *args, **kwargs)
 
 
 class SecretServerClientError(SecretServerError):
@@ -315,22 +357,34 @@ class Authorizer(ABC):
         self._cache_server_type(key, detected)
 
     def _validate_health_endpoint(self, url):
-        """Validates if an endpoint returns healthy status."""
+        """Validates if an endpoint returns healthy status.
+
+        Requires a successful HTTP status (2xx) AND either a JSON body of
+        ``{"Healthy": true}`` or a body that is *exactly* (case-insensitive,
+        surrounding whitespace ignored) ``"healthy"``. A prior substring
+        check (``b"healthy" in body``) also matched ``"Unhealthy"`` and
+        ignored the HTTP status entirely, letting an error page or captive
+        portal flip detection.
+        """
         try:
             response = requests.get(url, timeout=DEFAULT_REQUEST_TIMEOUT)
-        except Exception:
+        except Exception as exc:
+            logger.debug("Health probe to %s failed: %s", url, type(exc).__name__)
             return False
 
-        try:
-            response_body = response.content
-        except Exception:
+        if not response.ok:
             return False
 
         try:
             json_data = response.json()
-            return json_data.get("Healthy", False)
+            return bool(json_data.get("Healthy", False))
         except Exception:
-            return b"Healthy" in response_body or b"healthy" in response_body
+            pass
+
+        try:
+            return response.text.strip().lower() == "healthy"
+        except Exception:
+            return False
 
     @abstractmethod
     def get_access_token(self):
@@ -358,6 +412,7 @@ class AccessTokenAuthorizer(Authorizer):
         """
         self.access_token = access_token
         self.base_url = base_url.rstrip("/")
+        _warn_if_insecure(self.base_url)
         self._perform_server_detection(self.base_url, server_type=server_type)
 
 
@@ -457,6 +512,7 @@ class PasswordGrantAuthorizer(Authorizer):
                 matching token endpoint is selected without probing.
         """
         self.base_url = base_url.rstrip("/")
+        _warn_if_insecure(self.base_url)
         self.username = username
         self.password = password
         self.domain = domain
@@ -547,7 +603,7 @@ class SecretServer:
         api_path_uri=API_PATH_URI,
     ):
         """
-        :param base_url: The base URL e.g. ``http://localhost/SecretServer``
+        :param base_url: The base URL e.g. ``https://localhost/SecretServer``
         :type base_url: str
         :param authorizer: The authorization method to be used
         :type authorizer: Authorizer
@@ -555,6 +611,7 @@ class SecretServer:
         :type api_path_uri: str
         """
         self.base_url = base_url.rstrip("/")
+        _warn_if_insecure(self.base_url)
         self.platform_url = self.base_url
         self.authorizer = authorizer
         self._api_path_uri = api_path_uri
@@ -579,7 +636,8 @@ class SecretServer:
                 )
                 if resp.status_code != 200:
                     raise SecretServerError(
-                        f"Failed to fetch vault details: HTTP {resp.status_code} - {resp.text}"
+                        f"Failed to fetch vault details: HTTP {resp.status_code} - "
+                        f"{_safe_body_excerpt(resp.text)}"
                     )
                 try:
                     data = resp.json()
@@ -590,6 +648,15 @@ class SecretServer:
                         conn = vault.get("connection", {})
                         url = conn.get("url")
                         if url:
+                            parsed = urlsplit(url)
+                            if parsed.scheme != "https" or not parsed.netloc:
+                                raise SecretServerError(
+                                    "Vault connection URL is not a valid https "
+                                    f"URL: {_safe_body_excerpt(url)}"
+                                )
+                            logger.info(
+                                "Switching base_url to platform vault connection URL"
+                            )
                             self.base_url = url.rstrip("/")
                             self._vault_url_fetched = True
                             return
@@ -692,7 +759,9 @@ class SecretServer:
         try:
             secret = json.loads(response)
         except json.JSONDecodeError:
-            raise SecretServerError(response)
+            # This is the secrets endpoint: never echo the raw body into an
+            # exception message, since it may contain secret field values.
+            raise SecretServerError("Unable to parse secret response as JSON.")
 
         if fetch_file_attachments:
             for item in secret["items"]:
@@ -741,7 +810,10 @@ class SecretServer:
         try:
             folder = json.loads(response)
         except json.JSONDecodeError:
-            raise SecretServerError(response)
+            raise SecretServerError(
+                f"Unable to parse folder response as JSON: "
+                f"{_safe_body_excerpt(response)}"
+            )
 
         return folder
 
@@ -876,7 +948,10 @@ class SecretServer:
         try:
             secrets = json.loads(response)
         except json.JSONDecodeError:
-            raise SecretServerError(response)
+            raise SecretServerError(
+                f"Unable to parse secrets search response as JSON: "
+                f"{_safe_body_excerpt(response)}"
+            )
 
         secret_ids = []
         for secret in secrets["records"]:
