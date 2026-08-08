@@ -9,17 +9,25 @@ on:
     branches:
       - main
 
+# Default to read-only; the lint job below grants itself the write scopes
+# lint-action actually needs (auto-fix commits + check-run annotations).
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Run black linter
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # auto_fix: true pushes formatting commits back to the branch
+      checks: write # lint-action publishes results as a check run
     steps:
       - name: Check out Git repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       - name: Install Python dependencies
-        run: pip install black
+        run: pip install black==26.5.1 # match the pin in requirements.txt
       - name: Run black
         uses: wearerequired/lint-action@548d8a7c4b04d3553d32ed5b6e91eb171e10e7bb # v2
         with:
