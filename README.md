@@ -220,9 +220,9 @@ cd python-tss-sdk
 python -m venv venv
 . venv/bin/activate
 
-# Install dependencies
+# Install dependencies (runtime + test/build tooling)
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 Valid credentials are required to run the unit tests. The credentials should be stored in environment variables or in a `.env` file:

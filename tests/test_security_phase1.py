@@ -12,7 +12,7 @@ network is mocked by patching ``delinea.secrets.server.requests``.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -136,7 +136,7 @@ def _grant_authorizer_with_token(refreshed_seconds_ago, expires_in=1200):
         "https://ss.example.com", "user", "pass", server_type="secret_server"
     )
     auth.access_grant = {"access_token": "old", "expires_in": expires_in}
-    auth.access_grant_refreshed = datetime.now() - timedelta(
+    auth.access_grant_refreshed = datetime.now(timezone.utc) - timedelta(
         seconds=refreshed_seconds_ago
     )
     # Shadow the grant call on the instance so no network is needed.

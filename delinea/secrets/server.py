@@ -21,7 +21,7 @@ import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from urllib.parse import urlsplit
 
@@ -286,7 +286,7 @@ class Authorizer(ABC):
     _clear_server_type_cache = clear_server_type_cache
 
     @staticmethod
-    def add_bearer_token_authorization_header(bearer_token, existing_headers={}):
+    def add_bearer_token_authorization_header(bearer_token, existing_headers=None):
         """Adds an HTTP `Authorization` header containing the `Bearer` token
 
         :param existing_headers: a ``dict`` containing the existing headers
@@ -297,7 +297,7 @@ class Authorizer(ABC):
 
         return {
             "Authorization": "Bearer " + bearer_token,
-            **existing_headers,
+            **(existing_headers or {}),
         }
 
     def _perform_server_detection(self, base_url, server_type=None):
@@ -390,7 +390,7 @@ class Authorizer(ABC):
     def get_access_token(self):
         """Returns the access_token from a Grant Request"""
 
-    def headers(self, existing_headers={}):
+    def headers(self, existing_headers=None):
         """Returns a dictionary containing headers for REST API calls"""
         return self.add_bearer_token_authorization_header(
             self.get_access_token(), existing_headers
@@ -446,56 +446,67 @@ class PasswordGrantAuthorizer(Authorizer):
         """Refreshes the *OAuth2 Access Grant* if it has expired or will in the next
         `seconds_of_drift` seconds.
 
+        Guarded by ``_refresh_lock`` so two threads sharing an authorizer
+        cannot interleave a read of ``access_grant`` with its replacement.
+
         :raise :class:`SecretServerError` when the server returns anything other
                than a valid Access Grant
         """
 
-        if (
-            hasattr(self, "access_grant")
-            and self.access_grant_refreshed
-            + timedelta(seconds=self.access_grant["expires_in"] - seconds_of_drift)
-            > datetime.now()
-        ):
-            return
-        else:
-            # Detect server type if not already done
-            if not hasattr(self, "_server_type"):
-                self._perform_server_detection(self.base_url)
-            # Decide token_path_uri if not provided
-            if not self.token_path_uri:
+        with self._refresh_lock:
+            if hasattr(
+                self, "access_grant"
+            ) and self.access_grant_refreshed + timedelta(
+                seconds=self.access_grant["expires_in"] - seconds_of_drift
+            ) > datetime.now(
+                timezone.utc
+            ):
+                return
+            else:
+                # Detect server type if not already done
+                if not hasattr(self, "_server_type"):
+                    self._perform_server_detection(self.base_url)
+                # Decide token_path_uri if not provided
+                if not self.token_path_uri:
+                    if self._server_type == "secret_server":
+                        self.token_path_uri = self.TOKEN_PATH_URI
+                    elif self._server_type == "platform":
+                        self.token_path_uri = self.PLATFORM_TOKEN_PATH_URI
+                    else:
+                        raise SecretServerError(
+                            "Unknown server type for token request."
+                        )
                 if self._server_type == "secret_server":
-                    self.token_path_uri = self.TOKEN_PATH_URI
+                    self.token_url = (
+                        self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                    )
+                    grant_request = {
+                        "username": self.username,
+                        "password": self.password,
+                        "grant_type": "password",
+                    }
+                    if hasattr(self, "domain") and self.domain:
+                        grant_request["domain"] = self.domain
+                    self.access_grant = self.get_access_grant(
+                        self.token_url, grant_request
+                    )
+                    self.access_grant_refreshed = datetime.now(timezone.utc)
                 elif self._server_type == "platform":
-                    self.token_path_uri = self.PLATFORM_TOKEN_PATH_URI
+                    self.token_url = (
+                        self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                    )
+                    grant_request = {
+                        "client_id": self.username,
+                        "client_secret": self.password,
+                        "grant_type": "client_credentials",
+                        "scope": "xpmheadless",
+                    }
+                    self.access_grant = self.get_access_grant(
+                        self.token_url, grant_request
+                    )
+                    self.access_grant_refreshed = datetime.now(timezone.utc)
                 else:
                     raise SecretServerError("Unknown server type for token request.")
-            if self._server_type == "secret_server":
-                self.token_url = (
-                    self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
-                )
-                grant_request = {
-                    "username": self.username,
-                    "password": self.password,
-                    "grant_type": "password",
-                }
-                if hasattr(self, "domain") and self.domain:
-                    grant_request["domain"] = self.domain
-                self.access_grant = self.get_access_grant(self.token_url, grant_request)
-                self.access_grant_refreshed = datetime.now()
-            elif self._server_type == "platform":
-                self.token_url = (
-                    self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
-                )
-                grant_request = {
-                    "client_id": self.username,
-                    "client_secret": self.password,
-                    "grant_type": "client_credentials",
-                    "scope": "xpmheadless",
-                }
-                self.access_grant = self.get_access_grant(self.token_url, grant_request)
-                self.access_grant_refreshed = datetime.now()
-            else:
-                raise SecretServerError("Unknown server type for token request.")
 
     def __init__(
         self,
@@ -519,6 +530,7 @@ class PasswordGrantAuthorizer(Authorizer):
         self.token_path_uri = token_path_uri  # May be None, will decide in _refresh
         self.token_url = None
         self.grant_request = None
+        self._refresh_lock = Lock()
         # When an explicit type is given, resolve it now (no network) so the
         # lazy detection in _refresh is skipped and no probe is ever issued.
         if server_type is not None:
@@ -716,24 +728,21 @@ class SecretServer:
         self.ensure_vault_url()
         endpoint_url = f"{self.api_url}/folders/{id}"
 
+        # Normalize before writing getAllChildren: query_params defaults to
+        # None, and get_all_children defaults to True, so the write below
+        # would otherwise raise TypeError on a bare get_folder_json(id) call.
+        query_params = dict(query_params) if query_params else {}
         if get_all_children:
             query_params["getAllChildren"] = "true"
 
-        if query_params is None:
-            return self.process(
-                requests.get(
-                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
-                )
-            ).text
-        else:
-            return self.process(
-                requests.get(
-                    endpoint_url,
-                    params=query_params,
-                    headers=headers,
-                    timeout=DEFAULT_REQUEST_TIMEOUT,
-                )
-            ).text
+        return self.process(
+            requests.get(
+                endpoint_url,
+                params=query_params,
+                headers=headers,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
+        ).text
 
     def get_secret(self, id, fetch_file_attachments=True, query_params=None):
         """Gets a secret
@@ -774,7 +783,7 @@ class SecretServer:
                                 headers=self.headers(),
                                 timeout=DEFAULT_REQUEST_TIMEOUT,
                             )
-                        )
+                        ).text
                     else:
                         item["itemValue"] = self.process(
                             requests.get(
@@ -783,7 +792,7 @@ class SecretServer:
                                 headers=self.headers(),
                                 timeout=DEFAULT_REQUEST_TIMEOUT,
                             )
-                        )
+                        ).text
         return secret
 
     def get_folder(self, id, query_params=None, get_all_children=False):
@@ -935,7 +944,7 @@ class SecretServer:
         self.ensure_vault_url()
         params = {"filter.folderId": folder_id}
         endpoint_url = f"{self.api_url}/secrets/search-total"
-        params["take"] = self.process(
+        take_response = self.process(
             requests.get(
                 endpoint_url,
                 params=params,
@@ -943,6 +952,13 @@ class SecretServer:
                 timeout=DEFAULT_REQUEST_TIMEOUT,
             )
         ).text
+        try:
+            params["take"] = int(take_response)
+        except ValueError:
+            raise SecretServerError(
+                f"Unexpected non-numeric secrets count from search-total: "
+                f"{_safe_body_excerpt(take_response)}"
+            )
         response = self.search_secrets(query_params=params)
 
         try:
