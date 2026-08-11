@@ -96,6 +96,8 @@ authorizer = AccessTokenAuthorizer(
 
 An explicit `server_type` applies only to the instance that supplies it and is never written to the shared cache, so it cannot affect auto-detection for other authorizers. If a `base_url` is ever re-provisioned to a different server type while a long-lived process is running, call `Authorizer.clear_server_type_cache()` to force re-detection.
 
+When detection *fails* — both probes unreachable or blocked — the result cannot be cached, so without further protection every construction would re-probe at full rate, adding to whatever is already blocking the endpoint. To prevent that, a failed detection opens a short backoff window for that `base_url` (5 seconds, doubling on consecutive failures, capped at 60) during which constructions fail fast without probing. The window is deliberately time-limited and self-healing: a successful detection clears it, and it always expires on its own, so a transient outage never becomes a permanent one. `Authorizer.clear_server_type_cache()` also clears any open backoff windows, and an explicit `server_type` bypasses them entirely because it never probes.
+
 ## Secret Server Cloud
 
 The SDK API requires an `Authorizer` and either a `tenant` or a `base_url`. In the case of plaform authentication, only a `base_url` is supported.

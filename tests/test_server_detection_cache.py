@@ -18,6 +18,8 @@ from delinea.secrets.server import (
     AccessTokenAuthorizer,
     Authorizer,
     PasswordGrantAuthorizer,
+    SecretServer,
+    SecretServerClientError,
     SecretServerError,
 )
 
@@ -164,7 +166,11 @@ def test_failure_is_not_cached(monkeypatch):
     with pytest.raises(SecretServerError):
         AccessTokenAuthorizer("tok", base_url)
 
+    # A failure is never written to the SUCCESS cache...
     assert base_url not in Authorizer._server_type_cache
+    # ...but it does open a short backoff window, so let it expire before
+    # asserting recovery (see test_detection_backoff_* for that behavior).
+    Authorizer._clear_detection_failure(base_url)
 
     # Then: probes become healthy -> re-probe succeeds (failure was not cached).
     healthy_get, counter = make_probe_counter({PLATFORM_HEALTH})
@@ -336,3 +342,202 @@ def test_public_clear_cache(monkeypatch):
 
     AccessTokenAuthorizer("tok", base_url)  # cache empty -> probes again
     assert counter["rounds"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Detection-failure backoff (ADO 734475)
+#
+# Caching successes alone leaves the WAF case unprotected: while a tenant edge
+# is blocking the probes, every probe FAILS, so nothing is cached and every
+# construction re-probes at full rate -- the fix stops the burst from starting
+# but provides no braking once it has started. These tests cover the negative
+# cache: bounded, time-limited, and self-healing.
+# ---------------------------------------------------------------------------
+
+
+class FakeClock:
+    """Controllable stand-in for ``time.monotonic``."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    clock = FakeClock()
+    monkeypatch.setattr("delinea.secrets.server.monotonic", clock)
+    return clock
+
+
+def test_repeated_failures_are_throttled(fake_clock, monkeypatch):
+    """20 constructions against a failing base_url must not yield 20 probe
+    rounds -- this is the WAF-block shape the ticket is about."""
+    base_url = "https://blocked.example.com"
+    unhealthy_get, counter = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+
+    for _ in range(20):
+        with pytest.raises(SecretServerError):
+            AccessTokenAuthorizer("tok", base_url)
+
+    # Without backoff this would be 20 rounds (40 raw GETs).
+    assert counter["rounds"] <= 3
+
+
+def test_backoff_expires_and_allows_recovery(fake_clock, monkeypatch):
+    """A transient outage must self-heal: once the window elapses the next
+    construction re-probes, and a recovered endpoint is detected normally."""
+    base_url = "https://recovering.example.com"
+    unhealthy_get, fail_counter = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", base_url)
+    assert fail_counter["rounds"] == 1
+
+    # Still inside the window -> suppressed, no new probe.
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", base_url)
+    assert fail_counter["rounds"] == 1
+
+    fake_clock.advance(Authorizer._DETECTION_BACKOFF_MAX_SECONDS + 1)
+
+    healthy_get, ok_counter = make_probe_counter({PLATFORM_HEALTH})
+    monkeypatch.setattr("delinea.secrets.server.requests.get", healthy_get)
+    instance = AccessTokenAuthorizer("tok", base_url)
+
+    assert instance._server_type == "platform"
+    assert ok_counter["rounds"] == 1
+
+
+def test_backoff_grows_and_is_capped(fake_clock, monkeypatch):
+    base_url = "https://blocked.example.com"
+    unhealthy_get, _ = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+
+    delays = []
+    for _ in range(6):
+        with pytest.raises(SecretServerError):
+            AccessTokenAuthorizer("tok", base_url)
+        expires_at, _failures = Authorizer._detection_failure_cache[base_url]
+        delays.append(expires_at - fake_clock.now)
+        fake_clock.advance(delays[-1] + 1)  # let it expire so the next probe runs
+
+    assert delays[1] > delays[0]  # grows
+    assert delays[-1] == Authorizer._DETECTION_BACKOFF_MAX_SECONDS  # capped
+    assert all(d <= Authorizer._DETECTION_BACKOFF_MAX_SECONDS for d in delays)
+
+
+def test_success_clears_the_backoff(fake_clock, monkeypatch):
+    """A recovered base_url must not carry its old failure count forward."""
+    base_url = "https://flaky.example.com"
+    unhealthy_get, _ = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", base_url)
+    fake_clock.advance(Authorizer._DETECTION_BACKOFF_MAX_SECONDS + 1)
+
+    healthy_get, _ = make_probe_counter({PLATFORM_HEALTH})
+    monkeypatch.setattr("delinea.secrets.server.requests.get", healthy_get)
+    AccessTokenAuthorizer("tok", base_url)
+    assert base_url not in Authorizer._detection_failure_cache
+
+    # A later failure starts from the base delay, not the escalated one.
+    Authorizer.clear_server_type_cache()
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", base_url)
+    expires_at, failures = Authorizer._detection_failure_cache[base_url]
+    assert failures == 1
+    assert expires_at - fake_clock.now == Authorizer._DETECTION_BACKOFF_BASE_SECONDS
+
+
+def test_failure_cache_is_bounded(fake_clock, monkeypatch):
+    """The negative cache must be bounded too -- otherwise it is the same
+    unbounded-growth vector the success cache was fixed for."""
+    unhealthy_get, _ = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+
+    maxsize = Authorizer._SERVER_TYPE_CACHE_MAXSIZE
+    for i in range(maxsize + 10):
+        with pytest.raises(SecretServerError):
+            AccessTokenAuthorizer("tok", f"https://host{i}.example.com")
+
+    assert len(Authorizer._detection_failure_cache) <= maxsize
+
+
+def test_suppressed_error_still_names_health_check(fake_clock, monkeypatch):
+    """Consumers (the Ansible collection) key WAF guidance off the phrase
+    'health check' in the message; the suppressed path must keep it."""
+    base_url = "https://blocked.example.com"
+    unhealthy_get, _ = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", base_url)
+    with pytest.raises(SecretServerError) as excinfo:
+        AccessTokenAuthorizer("tok", base_url)
+
+    assert "health check" in excinfo.value.message.lower()
+
+
+def test_explicit_server_type_bypasses_backoff(fake_clock, monkeypatch):
+    """The override never probes, so a backoff window must not block it."""
+    base_url = "https://blocked.example.com"
+    unhealthy_get, counter = make_probe_counter(set())
+    monkeypatch.setattr("delinea.secrets.server.requests.get", unhealthy_get)
+
+    with pytest.raises(SecretServerError):
+        AccessTokenAuthorizer("tok", base_url)
+    rounds_after_failure = counter["rounds"]
+
+    instance = AccessTokenAuthorizer("tok", base_url, server_type="platform")
+    assert instance._server_type == "platform"
+    assert counter["rounds"] == rounds_after_failure
+
+
+# ---------------------------------------------------------------------------
+# Error contract (ADO 734475): consumers must be able to classify a failure
+# and must never receive a crash instead of a SecretServerError.
+# ---------------------------------------------------------------------------
+
+
+class FakeErrorResponse:
+    def __init__(self, status_code, content):
+        self.status_code = status_code
+        self.content = content
+
+
+def test_client_error_exposes_the_response():
+    """Without this, a consumer cannot tell 401 (retry) from 403 (WAF block,
+    never retry) and must guess -- which is how retry amplification happens."""
+    with pytest.raises(SecretServerClientError) as excinfo:
+        SecretServer.process(FakeErrorResponse(403, b'{"message": "Forbidden"}'))
+
+    assert excinfo.value.response is not None
+    assert excinfo.value.response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"foo": 1}',            # dict without message/error
+        b'{"error": {"code": 5}}',  # non-string error (plausible OAuth shape)
+        b"123",                    # valid JSON, not an object
+        b"<html>WAF block page</html>",  # not JSON at all
+    ],
+)
+def test_malformed_error_bodies_raise_secret_server_error(body):
+    """These previously escaped as UnboundLocalError/TypeError, bypassing every
+    ``except SecretServerError`` handler in every consumer."""
+    with pytest.raises(SecretServerClientError) as excinfo:
+        SecretServer.process(FakeErrorResponse(400, body))
+
+    assert isinstance(excinfo.value.message, str)
+    assert excinfo.value.message

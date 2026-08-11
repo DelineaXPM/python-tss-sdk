@@ -21,6 +21,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import Lock
+from time import monotonic
 
 import requests
 
@@ -152,6 +153,12 @@ class SecretServerError(Exception):
 
     def __init__(self, message, response=None, *args, **kwargs):
         self.message = message
+        # Keep the response so callers can classify the failure. Without it a
+        # consumer cannot tell 401 (a stale token worth one retry) from 403 or
+        # 429 (an authorization denial or an edge WAF rate limit, where a
+        # retry re-fires the health-probe pair and amplifies the very burst
+        # that caused the block).
+        self.response = response
         super().__init__(*args, **kwargs)
 
 
@@ -186,6 +193,22 @@ class Authorizer(ABC):
     _SERVER_TYPE_CACHE_MAXSIZE = 128
     _server_type_cache = OrderedDict()
     _server_type_cache_lock = Lock()
+
+    # Negative cache: normalized base_url -> (expires_at, consecutive_failures).
+    #
+    # Caching only successes leaves the WAF case unprotected. While a Platform
+    # tenant edge is rate-limiting the probes, EVERY probe fails, so nothing is
+    # cached and every construction re-probes at full rate -- the success cache
+    # stops the burst from starting but provides no braking once it has. This
+    # suppresses re-probing for a short, exponentially growing window instead.
+    #
+    # The window is deliberately bounded and self-healing: a sticky failure
+    # would turn a transient outage into a hard outage, which is a worse
+    # failure mode than the burst. Shares ``_server_type_cache_lock`` and the
+    # same size bound as the success cache.
+    _DETECTION_BACKOFF_BASE_SECONDS = 5.0
+    _DETECTION_BACKOFF_MAX_SECONDS = 60.0
+    _detection_failure_cache = OrderedDict()
 
     @classmethod
     def _normalize_server_type(cls, server_type):
@@ -223,17 +246,62 @@ class Authorizer(ABC):
                 Authorizer._server_type_cache.popitem(last=False)
 
     @classmethod
-    def clear_server_type_cache(cls):
-        """Clear the process-scoped server-detection cache.
+    def _get_detection_backoff(cls, key):
+        """Return the seconds remaining before ``key`` may be probed again, or
+        ``None`` when probing is allowed (no recent failure, or the window has
+        elapsed)."""
+        with Authorizer._server_type_cache_lock:
+            entry = Authorizer._detection_failure_cache.get(key)
+            if entry is None:
+                return None
+            expires_at, _failures = entry
+            remaining = expires_at - monotonic()
+            if remaining <= 0:
+                return None
+            Authorizer._detection_failure_cache.move_to_end(key)
+            return remaining
 
-        Detection results are cached for the lifetime of the process with no
-        TTL, because a server's type at a given ``base_url`` is effectively
-        immutable in practice. Use this escape hatch to force re-detection if a
-        ``base_url`` is ever re-provisioned to a different server type while a
-        long-lived process is running.
+    @classmethod
+    def _record_detection_failure(cls, key):
+        """Open (or extend) the backoff window for ``key`` and return the delay
+        applied, in seconds."""
+        with Authorizer._server_type_cache_lock:
+            entry = Authorizer._detection_failure_cache.get(key)
+            failures = entry[1] + 1 if entry is not None else 1
+            delay = min(
+                cls._DETECTION_BACKOFF_BASE_SECONDS * (2 ** (failures - 1)),
+                cls._DETECTION_BACKOFF_MAX_SECONDS,
+            )
+            Authorizer._detection_failure_cache[key] = (monotonic() + delay, failures)
+            Authorizer._detection_failure_cache.move_to_end(key)
+            while len(Authorizer._detection_failure_cache) > cls._SERVER_TYPE_CACHE_MAXSIZE:
+                Authorizer._detection_failure_cache.popitem(last=False)
+            return delay
+
+    @classmethod
+    def _clear_detection_failure(cls, key):
+        """Forget any backoff window for ``key`` (called on a successful
+        detection, so a recovered host does not carry its failure count)."""
+        with Authorizer._server_type_cache_lock:
+            Authorizer._detection_failure_cache.pop(key, None)
+
+    @classmethod
+    def clear_server_type_cache(cls):
+        """Clear the process-scoped server-detection caches.
+
+        Successful detection results are cached for the lifetime of the process
+        with no TTL, because a server's type at a given ``base_url`` is
+        effectively immutable in practice. Use this escape hatch to force
+        re-detection if a ``base_url`` is ever re-provisioned to a different
+        server type while a long-lived process is running.
+
+        Also clears any detection-failure backoff windows, so a caller that
+        knows a previously unreachable host has recovered can retry at once
+        instead of waiting the window out.
         """
         with Authorizer._server_type_cache_lock:
             Authorizer._server_type_cache.clear()
+            Authorizer._detection_failure_cache.clear()
 
     # Backwards-compatible alias retained for existing callers/tests.
     _clear_server_type_cache = clear_server_type_cache
@@ -297,16 +365,33 @@ class Authorizer(ABC):
             self._server_type = cached
             return
 
+        backoff = self._get_detection_backoff(key)
+        if backoff is not None:
+            # Detection failed recently. Re-probing now would most likely fail
+            # again and, against a WAF-protected tenant, add to the burst that
+            # caused the block. Fail fast until the window elapses.
+            raise SecretServerError(
+                "Unable to detect server type via health check endpoints for "
+                f"{key}: a recent detection attempt failed, so probing is "
+                f"suppressed for another {backoff:.1f}s. If the host is known "
+                "to be reachable now, call clear_server_type_cache(), or pass "
+                "an explicit server_type to skip detection entirely."
+            )
+
         if self._validate_health_endpoint(key + "/api/v1/healthcheck"):
             detected = "secret_server"
         elif self._validate_health_endpoint(key + "/health"):
             detected = "platform"
         else:
+            delay = self._record_detection_failure(key)
             raise SecretServerError(
-                "Unable to detect server type via health check endpoints."
+                "Unable to detect server type via health check endpoints. "
+                f"Suppressing further probes for {key} for {delay:.0f}s to "
+                "avoid compounding the failure."
             )
 
         self._server_type = detected
+        self._clear_detection_failure(key)
         self._cache_server_type(key, detected)
 
     def _validate_health_endpoint(self, url):
@@ -514,14 +599,28 @@ class SecretServer:
         if response.status_code >= 200 and response.status_code < 300:
             return response
         if response.status_code >= 400 and response.status_code < 500:
+            # ``message`` must be bound on EVERY path. Previously a body that
+            # parsed as JSON but was not an object with the expected keys (for
+            # example ``{"error": {...}}``, a plausible OAuth error shape, or a
+            # bare ``123``) left it unbound and raised UnboundLocalError or
+            # TypeError from here -- bypassing every ``except SecretServerError``
+            # handler in every consumer and surfacing as a raw traceback.
+            message = None
             try:
                 content = json.loads(response.content)
-                if "message" in content:
-                    message = content["message"]
-                elif "error" in content and isinstance(content["error"], str):
-                    message = content["error"]
-            except json.JSONDecodeError as err:
-                message = err.msg
+            except ValueError as err:  # includes json.JSONDecodeError
+                message = getattr(err, "msg", None) or str(err)
+            else:
+                if isinstance(content, dict):
+                    if "message" in content:
+                        message = content["message"]
+                    elif "error" in content and isinstance(content["error"], str):
+                        message = content["error"]
+            if not isinstance(message, str) or not message:
+                message = (
+                    f"HTTP {response.status_code} with no recognized error "
+                    "detail in the response body"
+                )
             raise SecretServerClientError(message, response)
         else:
             raise SecretServerServiceError(response)
