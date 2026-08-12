@@ -31,7 +31,7 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 
 #### Password Authorization
 
-If using traditional `username` and `password` authentication to log in to your Secret Server either directly or through Platform, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token` or `/identity/api/oauth2/token/xpmplatform`, depending on whether a secret server or platform is used for authentication.
+If using traditional `username` and `password` authentication to log in to your Secret Server either directly or through Platform, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token` or `/identity/api/oauth2/token/xpmplatform`, depending on whether a secret server or platform is used for authentication. It also optionally takes a `server_type` (`"secret_server"` or `"platform"`) to skip automatic server-type detection — see [Server-Type Detection](#server-type-detection).
 
 ##### With Secret Server
 ```python
@@ -50,7 +50,7 @@ authorizer = PasswordGrantAuthorizer("https://platform.delinea.app", os.getenv("
 
 #### Domain Authorization
 
-To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`. It is applicable only when authentication is done using a secret server.
+To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`, and a `server_type` (see [Server-Type Detection](#server-type-detection)). It is applicable only when authentication is done using a secret server.
 
 ```python
 from delinea.secrets.server import DomainPasswordGrantAuthorizer
@@ -60,7 +60,7 @@ authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", os.g
 
 #### Access Token Authorization
 
-If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`. The `AccessTokenAuthorizer` requires a `access_token` and `base_url`.
+If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`. The `AccessTokenAuthorizer` requires a `access_token` and `base_url`. It optionally takes a `server_type` (see [Server-Type Detection](#server-type-detection)).
 
 ##### With Secret Server
 ```python
@@ -76,6 +76,25 @@ from delinea.secrets.server import AccessTokenAuthorizer
 
 authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...", "https://platform.delinea.app")
 ```
+
+#### Server-Type Detection
+
+By default every authorizer automatically detects whether the `base_url` points at a Secret Server or a Platform instance by probing its health-check endpoints (`/api/v1/healthcheck` then `/health`). The result is cached per `base_url` for the lifetime of the process, so the probe pair fires only once per `base_url`.
+
+You can skip detection entirely by passing an explicit `server_type` of either `"secret_server"` or `"platform"`. When supplied, no health-check probe is issued. This is recommended for callers that run each lookup in a fresh, short-lived process (for example, some Ansible lookup-plugin runtimes), where a fresh process cannot benefit from the in-process cache and the repeated unauthenticated probes can be rate-limited to `403` by the Delinea Platform WAF.
+
+```python
+from delinea.secrets.server import AccessTokenAuthorizer
+
+# No health-check probe is issued; the type is used directly.
+authorizer = AccessTokenAuthorizer(
+    "AgJ1slfZsEng9bKsssB-tic0Kh8I...",
+    "https://platform.delinea.app",
+    server_type="platform",
+)
+```
+
+An explicit `server_type` applies only to the instance that supplies it and is never written to the shared cache, so it cannot affect auto-detection for other authorizers. If a `base_url` is ever re-provisioned to a different server type while a long-lived process is running, call `Authorizer.clear_server_type_cache()` to force re-detection.
 
 ## Secret Server Cloud
 
@@ -188,7 +207,7 @@ When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environme
 
 ## Create a Build Environment (optional)
 
-The SDK requires [Python 3.8](https://www.python.org/downloads/) or higher.
+The SDK requires [Python 3.10](https://www.python.org/downloads/) or higher.
 
 First, ensure Python is in `$PATH`, then run:
 
@@ -201,9 +220,9 @@ cd python-tss-sdk
 python -m venv venv
 . venv/bin/activate
 
-# Install dependencies
+# Install dependencies (runtime + test/build tooling)
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 Valid credentials are required to run the unit tests. The credentials should be stored in environment variables or in a `.env` file:

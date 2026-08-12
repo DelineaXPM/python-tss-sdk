@@ -2,6 +2,11 @@ name: Run Tests
 
 on: [pull_request]
 
+# This workflow only checks out code and runs the test suite; it never
+# writes to the repo or opens PRs/issues, so read-only is sufficient.
+permissions:
+  contents: read
+
 jobs:
 
   build:
@@ -9,7 +14,8 @@ jobs:
     environment: testing
     strategy:
       matrix:
-        python: [3.8, 3.9, "3.10", "3.11"]
+        # Python 3.8/3.9 dropped: fixed requests/urllib3 pins require Python >= 3.10 (work item 741117)
+        python: ["3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5

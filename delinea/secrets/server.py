@@ -15,12 +15,58 @@ Example:
 """
 
 import json
+import logging
 import re
+import warnings
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from threading import Lock
+from urllib.parse import urlsplit
 
 import requests
+
+logger = logging.getLogger(__name__)
+
+# Applied to every HTTP call the SDK makes; ``requests`` has no default
+# timeout, so an omitted value would let a stalled connection hang forever.
+DEFAULT_REQUEST_TIMEOUT = 60
+
+# Cap on how much of a server response body is echoed into an exception
+# message, so a malformed/oversized response cannot flood logs and so
+# exception text stays clearly distinguishable from a full response body.
+_BODY_EXCERPT_LIMIT = 200
+
+
+def _warn_if_insecure(base_url):
+    """Warn when ``base_url`` does not use ``https``.
+
+    Credentials (password / client_secret) and bearer tokens are sent to
+    ``base_url`` in plaintext when the scheme is not ``https``. This only
+    warns today, to preserve compatibility with existing localhost/lab
+    setups that use plain HTTP.
+    TODO(v3.0): reject a non-https ``base_url`` by default, with an explicit
+    opt-out (e.g. ``allow_http=True``) for those setups.
+    """
+    if urlsplit(base_url).scheme.lower() != "https":
+        warnings.warn(
+            f"base_url {base_url!r} does not use https; credentials and "
+            "bearer tokens will be sent unencrypted.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def _safe_body_excerpt(text, limit=_BODY_EXCERPT_LIMIT):
+    """Return a length-capped excerpt of a response body for use in error
+    messages, marked when truncated so it's clearly not the full body."""
+    if text is None:
+        return ""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
 
 
 @dataclass
@@ -150,7 +196,10 @@ class SecretServerError(Exception):
 
     def __init__(self, message, response=None, *args, **kwargs):
         self.message = message
-        super().__init__(*args, **kwargs)
+        self.response = response
+        # Pass message through so str(exception) is populated for default
+        # traceback/log output, not just the .message attribute.
+        super().__init__(message, *args, **kwargs)
 
 
 class SecretServerClientError(SecretServerError):
@@ -164,8 +213,80 @@ class SecretServerServiceError(SecretServerError):
 class Authorizer(ABC):
     """Main abstract base class for all Authorizer access methods."""
 
+    # Accepted values for an explicit ``server_type`` override and for cached
+    # detections.
+    VALID_SERVER_TYPES = ("secret_server", "platform")
+
+    # Process-scoped, bounded LRU cache mapping a normalized base_url to its
+    # detected server type ("secret_server" | "platform"). Shared across all
+    # Authorizer subclasses so the health-check probe pair fires once per
+    # base_url per process. Bounded to ``_SERVER_TYPE_CACHE_MAXSIZE`` entries so
+    # a long-lived process that constructs authorizers against many distinct
+    # URLs cannot grow it without bound; the least-recently-used entry is
+    # evicted on overflow. Guarded by ``_server_type_cache_lock``.
+    #
+    # NOTE: This cache is process-scoped. It deduplicates probes only within a
+    # single Python process. Callers that run each lookup in a fresh process
+    # (e.g. some Ansible lookup-plugin runtimes) start with an empty cache and
+    # will re-probe. To eliminate the probe entirely in that case, pass an
+    # explicit ``server_type`` to the authorizer (see ``_perform_server_detection``).
+    _SERVER_TYPE_CACHE_MAXSIZE = 128
+    _server_type_cache = OrderedDict()
+    _server_type_cache_lock = Lock()
+
+    @classmethod
+    def _normalize_server_type(cls, server_type):
+        """Validate and normalize an explicit ``server_type`` value.
+
+        :raise :class:`SecretServerError` when ``server_type`` is not one of
+                ``VALID_SERVER_TYPES``.
+        """
+        normalized = str(server_type).strip().lower()
+        if normalized not in cls.VALID_SERVER_TYPES:
+            raise SecretServerError(
+                f"Invalid server_type {server_type!r}; expected one of "
+                f"{cls.VALID_SERVER_TYPES}."
+            )
+        return normalized
+
+    @classmethod
+    def _get_cached_server_type(cls, key):
+        """Return the cached server type for ``key`` (marking it most-recently
+        used) or ``None`` if absent."""
+        with Authorizer._server_type_cache_lock:
+            if key in Authorizer._server_type_cache:
+                Authorizer._server_type_cache.move_to_end(key)
+                return Authorizer._server_type_cache[key]
+            return None
+
+    @classmethod
+    def _cache_server_type(cls, key, server_type):
+        """Cache ``server_type`` for ``key``, evicting the least-recently-used
+        entry if the cache is over capacity."""
+        with Authorizer._server_type_cache_lock:
+            Authorizer._server_type_cache[key] = server_type
+            Authorizer._server_type_cache.move_to_end(key)
+            while len(Authorizer._server_type_cache) > cls._SERVER_TYPE_CACHE_MAXSIZE:
+                Authorizer._server_type_cache.popitem(last=False)
+
+    @classmethod
+    def clear_server_type_cache(cls):
+        """Clear the process-scoped server-detection cache.
+
+        Detection results are cached for the lifetime of the process with no
+        TTL, because a server's type at a given ``base_url`` is effectively
+        immutable in practice. Use this escape hatch to force re-detection if a
+        ``base_url`` is ever re-provisioned to a different server type while a
+        long-lived process is running.
+        """
+        with Authorizer._server_type_cache_lock:
+            Authorizer._server_type_cache.clear()
+
+    # Backwards-compatible alias retained for existing callers/tests.
+    _clear_server_type_cache = clear_server_type_cache
+
     @staticmethod
-    def add_bearer_token_authorization_header(bearer_token, existing_headers={}):
+    def add_bearer_token_authorization_header(bearer_token, existing_headers=None):
         """Adds an HTTP `Authorization` header containing the `Bearer` token
 
         :param existing_headers: a ``dict`` containing the existing headers
@@ -176,47 +297,100 @@ class Authorizer(ABC):
 
         return {
             "Authorization": "Bearer " + bearer_token,
-            **existing_headers,
+            **(existing_headers or {}),
         }
 
-    def _perform_server_detection(self, base_url):
-        """Detects if the server is Secret Server or Platform by health check endpoints."""
-        secret_server_endpoint = base_url.rstrip("/") + "/api/v1/healthcheck"
-        platform_endpoint = base_url.rstrip("/") + "/health"
+    def _perform_server_detection(self, base_url, server_type=None):
+        """Resolve whether the server is Secret Server or Platform.
 
-        if self._validate_health_endpoint(secret_server_endpoint):
-            self._server_type = "secret_server"
+        When an explicit ``server_type`` is supplied the value is validated
+        and used directly for THIS instance only -- NO health-check probe is
+        issued. This is the recommended path for callers that run each lookup
+        in a fresh process (e.g. some Ansible lookup-plugin runtimes) where the
+        process-scoped cache cannot help: skipping detection eliminates the
+        unauthenticated ``/api/v1/healthcheck`` + ``/health`` probe burst that
+        the Delinea Platform WAF rate-limits to 403.
+
+        An explicit override is deliberately NOT written to the shared
+        process-scoped cache: the override is unverified, so seeding the cache
+        would let a wrong/typo'd value silently poison auto-detection for
+        unrelated callers using the same ``base_url`` in the same process. Only
+        verified probe detections populate the shared cache.
+
+        Otherwise the type is detected via the health-check endpoints, using a
+        process-scoped cache. The detected type is cached per normalized
+        ``base_url`` on the ``Authorizer`` base class and shared across all
+        subclasses, so the probe pair fires only once per ``base_url`` per
+        process. The cache is read/written under ``_server_type_cache_lock``
+        for thread safety, but the network probe itself runs OUTSIDE the lock;
+        detection is idempotent, so a rare double-probe under a race is
+        harmless. Only successful detections are cached -- failures re-probe on
+        the next construction.
+
+        On every path the per-instance ``_server_type`` attribute is set,
+        because callers (``SecretServer.ensure_vault_url`` and
+        ``PasswordGrantAuthorizer._refresh``) read ``self._server_type``.
+        """
+        key = base_url.rstrip("/")
+
+        if server_type is not None:
+            # Per-instance only; intentionally NOT seeded into the shared cache
+            # so an unverified override cannot poison auto-detection for others.
+            self._server_type = self._normalize_server_type(server_type)
             return
-        if self._validate_health_endpoint(platform_endpoint):
-            self._server_type = "platform"
+
+        cached = self._get_cached_server_type(key)
+        if cached is not None:
+            self._server_type = cached
             return
-        raise SecretServerError(
-            "Unable to detect server type via health check endpoints."
-        )
+
+        if self._validate_health_endpoint(key + "/api/v1/healthcheck"):
+            detected = "secret_server"
+        elif self._validate_health_endpoint(key + "/health"):
+            detected = "platform"
+        else:
+            raise SecretServerError(
+                "Unable to detect server type via health check endpoints."
+            )
+
+        self._server_type = detected
+        self._cache_server_type(key, detected)
 
     def _validate_health_endpoint(self, url):
-        """Validates if an endpoint returns healthy status."""
+        """Validates if an endpoint returns healthy status.
+
+        Requires a successful HTTP status (2xx) AND either a JSON body of
+        ``{"Healthy": true}`` or a body that is *exactly* (case-insensitive,
+        surrounding whitespace ignored) ``"healthy"``. A prior substring
+        check (``b"healthy" in body``) also matched ``"Unhealthy"`` and
+        ignored the HTTP status entirely, letting an error page or captive
+        portal flip detection.
+        """
         try:
-            response = requests.get(url, timeout=60)
-        except Exception:
+            response = requests.get(url, timeout=DEFAULT_REQUEST_TIMEOUT)
+        except Exception as exc:
+            logger.debug("Health probe to %s failed: %s", url, type(exc).__name__)
             return False
 
-        try:
-            response_body = response.content
-        except Exception:
+        if not response.ok:
             return False
 
         try:
             json_data = response.json()
-            return json_data.get("Healthy", False)
+            return bool(json_data.get("Healthy", False))
         except Exception:
-            return b"Healthy" in response_body or b"healthy" in response_body
+            pass
+
+        try:
+            return response.text.strip().lower() == "healthy"
+        except Exception:
+            return False
 
     @abstractmethod
     def get_access_token(self):
         """Returns the access_token from a Grant Request"""
 
-    def headers(self, existing_headers={}):
+    def headers(self, existing_headers=None):
         """Returns a dictionary containing headers for REST API calls"""
         return self.add_bearer_token_authorization_header(
             self.get_access_token(), existing_headers
@@ -231,10 +405,15 @@ class AccessTokenAuthorizer(Authorizer):
     def get_access_token(self):
         return self.access_token
 
-    def __init__(self, access_token, base_url):
+    def __init__(self, access_token, base_url, server_type=None):
+        """
+        :param server_type: optionally ``"secret_server"`` or ``"platform"`` to
+                skip health-check detection entirely (no probe is issued).
+        """
         self.access_token = access_token
         self.base_url = base_url.rstrip("/")
-        self._perform_server_detection(self.base_url)
+        _warn_if_insecure(self.base_url)
+        self._perform_server_detection(self.base_url, server_type=server_type)
 
 
 class PasswordGrantAuthorizer(Authorizer):
@@ -254,7 +433,9 @@ class PasswordGrantAuthorizer(Authorizer):
                 other than a valid Access Grant
         """
 
-        response = requests.post(token_url, grant_request, timeout=60)
+        response = requests.post(
+            token_url, grant_request, timeout=DEFAULT_REQUEST_TIMEOUT
+        )
 
         try:  # TSS returns a 200 (OK) containing HTML for some error conditions
             return json.loads(SecretServer.process(response).content)
@@ -265,65 +446,95 @@ class PasswordGrantAuthorizer(Authorizer):
         """Refreshes the *OAuth2 Access Grant* if it has expired or will in the next
         `seconds_of_drift` seconds.
 
+        Guarded by ``_refresh_lock`` so two threads sharing an authorizer
+        cannot interleave a read of ``access_grant`` with its replacement.
+
         :raise :class:`SecretServerError` when the server returns anything other
                than a valid Access Grant
         """
 
-        if (
-            hasattr(self, "access_grant")
-            and self.access_grant_refreshed
-            + timedelta(seconds=self.access_grant["expires_in"] + seconds_of_drift)
-            > datetime.now()
-        ):
-            return
-        else:
-            # Detect server type if not already done
-            if not hasattr(self, "_server_type"):
-                self._perform_server_detection(self.base_url)
-            # Decide token_path_uri if not provided
-            if not self.token_path_uri:
+        with self._refresh_lock:
+            if hasattr(
+                self, "access_grant"
+            ) and self.access_grant_refreshed + timedelta(
+                seconds=self.access_grant["expires_in"] - seconds_of_drift
+            ) > datetime.now(
+                timezone.utc
+            ):
+                return
+            else:
+                # Detect server type if not already done
+                if not hasattr(self, "_server_type"):
+                    self._perform_server_detection(self.base_url)
+                # Decide token_path_uri if not provided
+                if not self.token_path_uri:
+                    if self._server_type == "secret_server":
+                        self.token_path_uri = self.TOKEN_PATH_URI
+                    elif self._server_type == "platform":
+                        self.token_path_uri = self.PLATFORM_TOKEN_PATH_URI
+                    else:
+                        raise SecretServerError(
+                            "Unknown server type for token request."
+                        )
                 if self._server_type == "secret_server":
-                    self.token_path_uri = self.TOKEN_PATH_URI
+                    self.token_url = (
+                        self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                    )
+                    grant_request = {
+                        "username": self.username,
+                        "password": self.password,
+                        "grant_type": "password",
+                    }
+                    if hasattr(self, "domain") and self.domain:
+                        grant_request["domain"] = self.domain
+                    self.access_grant = self.get_access_grant(
+                        self.token_url, grant_request
+                    )
+                    self.access_grant_refreshed = datetime.now(timezone.utc)
                 elif self._server_type == "platform":
-                    self.token_path_uri = self.PLATFORM_TOKEN_PATH_URI
+                    self.token_url = (
+                        self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
+                    )
+                    grant_request = {
+                        "client_id": self.username,
+                        "client_secret": self.password,
+                        "grant_type": "client_credentials",
+                        "scope": "xpmheadless",
+                    }
+                    self.access_grant = self.get_access_grant(
+                        self.token_url, grant_request
+                    )
+                    self.access_grant_refreshed = datetime.now(timezone.utc)
                 else:
                     raise SecretServerError("Unknown server type for token request.")
-            if self._server_type == "secret_server":
-                self.token_url = (
-                    self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
-                )
-                grant_request = {
-                    "username": self.username,
-                    "password": self.password,
-                    "grant_type": "password",
-                }
-                if hasattr(self, "domain") and self.domain:
-                    grant_request["domain"] = self.domain
-                self.access_grant = self.get_access_grant(self.token_url, grant_request)
-                self.access_grant_refreshed = datetime.now()
-            elif self._server_type == "platform":
-                self.token_url = (
-                    self.base_url.rstrip("/") + "/" + self.token_path_uri.strip("/")
-                )
-                grant_request = {
-                    "client_id": self.username,
-                    "client_secret": self.password,
-                    "grant_type": "client_credentials",
-                    "scope": "xpmheadless",
-                }
-                self.access_grant = self.get_access_grant(self.token_url, grant_request)
-                self.access_grant_refreshed = datetime.now()
-            else:
-                raise SecretServerError("Unknown server type for token request.")
 
-    def __init__(self, base_url, username, password, token_path_uri=None, domain=None):
+    def __init__(
+        self,
+        base_url,
+        username,
+        password,
+        token_path_uri=None,
+        domain=None,
+        server_type=None,
+    ):
+        """
+        :param server_type: optionally ``"secret_server"`` or ``"platform"`` to
+                skip health-check detection entirely (no probe is issued); the
+                matching token endpoint is selected without probing.
+        """
         self.base_url = base_url.rstrip("/")
+        _warn_if_insecure(self.base_url)
         self.username = username
         self.password = password
         self.domain = domain
         self.token_path_uri = token_path_uri  # May be None, will decide in _refresh
         self.token_url = None
         self.grant_request = None
+        self._refresh_lock = Lock()
+        # When an explicit type is given, resolve it now (no network) so the
+        # lazy detection in _refresh is skipped and no probe is ever issued.
+        if server_type is not None:
+            self._perform_server_detection(self.base_url, server_type=server_type)
 
     def get_access_token(self):
         self._refresh()
@@ -340,9 +551,15 @@ class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
         domain,
         password,
         token_path_uri=None,
+        server_type=None,
     ):
         super().__init__(
-            base_url, username, password, token_path_uri=token_path_uri, domain=domain
+            base_url,
+            username,
+            password,
+            token_path_uri=token_path_uri,
+            domain=domain,
+            server_type=server_type,
         )
 
 
@@ -372,6 +589,9 @@ class SecretServer:
         if response.status_code >= 200 and response.status_code < 300:
             return response
         if response.status_code >= 400 and response.status_code < 500:
+            # Fallback used when the body is JSON but carries no recognized
+            # message/error key.
+            message = f"HTTP {response.status_code}"
             try:
                 content = json.loads(response.content)
                 if "message" in content:
@@ -395,7 +615,7 @@ class SecretServer:
         api_path_uri=API_PATH_URI,
     ):
         """
-        :param base_url: The base URL e.g. ``http://localhost/SecretServer``
+        :param base_url: The base URL e.g. ``https://localhost/SecretServer``
         :type base_url: str
         :param authorizer: The authorization method to be used
         :type authorizer: Authorizer
@@ -403,6 +623,7 @@ class SecretServer:
         :type api_path_uri: str
         """
         self.base_url = base_url.rstrip("/")
+        _warn_if_insecure(self.base_url)
         self.platform_url = self.base_url
         self.authorizer = authorizer
         self._api_path_uri = api_path_uri
@@ -422,10 +643,13 @@ class SecretServer:
                 access_token = self.authorizer.get_access_token()
                 vaults_endpoint = self.platform_url + "/vaultbroker/api/vaults"
                 headers = {"Authorization": f"Bearer {access_token}"}
-                resp = requests.get(vaults_endpoint, headers=headers, timeout=60)
+                resp = requests.get(
+                    vaults_endpoint, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
                 if resp.status_code != 200:
                     raise SecretServerError(
-                        f"Failed to fetch vault details: HTTP {resp.status_code} - {resp.text}"
+                        f"Failed to fetch vault details: HTTP {resp.status_code} - "
+                        f"{_safe_body_excerpt(resp.text)}"
                     )
                 try:
                     data = resp.json()
@@ -436,6 +660,15 @@ class SecretServer:
                         conn = vault.get("connection", {})
                         url = conn.get("url")
                         if url:
+                            parsed = urlsplit(url)
+                            if parsed.scheme != "https" or not parsed.netloc:
+                                raise SecretServerError(
+                                    "Vault connection URL is not a valid https "
+                                    f"URL: {_safe_body_excerpt(url)}"
+                                )
+                            logger.info(
+                                "Switching base_url to platform vault connection URL"
+                            )
                             self.base_url = url.rstrip("/")
                             self._vault_url_fetched = True
                             return
@@ -463,7 +696,9 @@ class SecretServer:
 
         if query_params is None:
             return self.process(
-                requests.get(endpoint_url, headers=headers, timeout=60)
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
             ).text
         else:
             return self.process(
@@ -471,7 +706,7 @@ class SecretServer:
                     endpoint_url,
                     params=query_params,
                     headers=headers,
-                    timeout=60,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -493,19 +728,21 @@ class SecretServer:
         self.ensure_vault_url()
         endpoint_url = f"{self.api_url}/folders/{id}"
 
+        # Normalize before writing getAllChildren: query_params defaults to
+        # None, and get_all_children defaults to True, so the write below
+        # would otherwise raise TypeError on a bare get_folder_json(id) call.
+        query_params = dict(query_params) if query_params else {}
         if get_all_children:
             query_params["getAllChildren"] = "true"
 
-        if query_params is None:
-            return self.process(requests.get(endpoint_url, headers=headers)).text
-        else:
-            return self.process(
-                requests.get(
-                    endpoint_url,
-                    params=query_params,
-                    headers=headers,
-                )
-            ).text
+        return self.process(
+            requests.get(
+                endpoint_url,
+                params=query_params,
+                headers=headers,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
+        ).text
 
     def get_secret(self, id, fetch_file_attachments=True, query_params=None):
         """Gets a secret
@@ -531,7 +768,9 @@ class SecretServer:
         try:
             secret = json.loads(response)
         except json.JSONDecodeError:
-            raise SecretServerError(response)
+            # This is the secrets endpoint: never echo the raw body into an
+            # exception message, since it may contain secret field values.
+            raise SecretServerError("Unable to parse secret response as JSON.")
 
         if fetch_file_attachments:
             for item in secret["items"]:
@@ -540,18 +779,20 @@ class SecretServer:
                     if query_params is None:
                         item["itemValue"] = self.process(
                             requests.get(
-                                endpoint_url, headers=self.headers(), timeout=60
+                                endpoint_url,
+                                headers=self.headers(),
+                                timeout=DEFAULT_REQUEST_TIMEOUT,
                             )
-                        )
+                        ).text
                     else:
                         item["itemValue"] = self.process(
                             requests.get(
                                 endpoint_url,
                                 params=query_params,
                                 headers=self.headers(),
-                                timeout=60,
+                                timeout=DEFAULT_REQUEST_TIMEOUT,
                             )
-                        )
+                        ).text
         return secret
 
     def get_folder(self, id, query_params=None, get_all_children=False):
@@ -578,7 +819,10 @@ class SecretServer:
         try:
             folder = json.loads(response)
         except json.JSONDecodeError:
-            raise SecretServerError(response)
+            raise SecretServerError(
+                f"Unable to parse folder response as JSON: "
+                f"{_safe_body_excerpt(response)}"
+            )
 
         return folder
 
@@ -638,7 +882,9 @@ class SecretServer:
 
         if query_params is None:
             return self.process(
-                requests.get(endpoint_url, headers=headers, timeout=60)
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
             ).text
         else:
             return self.process(
@@ -646,7 +892,7 @@ class SecretServer:
                     endpoint_url,
                     params=query_params,
                     headers=headers,
-                    timeout=60,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -667,13 +913,18 @@ class SecretServer:
         endpoint_url = f"{self.api_url}/folders/lookup"
 
         if query_params is None:
-            return self.process(requests.get(endpoint_url, headers=headers)).text
+            return self.process(
+                requests.get(
+                    endpoint_url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+                )
+            ).text
         else:
             return self.process(
                 requests.get(
                     endpoint_url,
                     params=query_params,
                     headers=headers,
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
             ).text
 
@@ -693,15 +944,30 @@ class SecretServer:
         self.ensure_vault_url()
         params = {"filter.folderId": folder_id}
         endpoint_url = f"{self.api_url}/secrets/search-total"
-        params["take"] = self.process(
-            requests.get(endpoint_url, params=params, headers=headers, timeout=60)
+        take_response = self.process(
+            requests.get(
+                endpoint_url,
+                params=params,
+                headers=headers,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
         ).text
+        try:
+            params["take"] = int(take_response)
+        except ValueError:
+            raise SecretServerError(
+                f"Unexpected non-numeric secrets count from search-total: "
+                f"{_safe_body_excerpt(take_response)}"
+            )
         response = self.search_secrets(query_params=params)
 
         try:
             secrets = json.loads(response)
         except json.JSONDecodeError:
-            raise SecretServerError(response)
+            raise SecretServerError(
+                f"Unable to parse secrets search response as JSON: "
+                f"{_safe_body_excerpt(response)}"
+            )
 
         secret_ids = []
         for secret in secrets["records"]:
@@ -730,7 +996,12 @@ class SecretServer:
         endpoint_url = f"{self.api_url}/folders/lookup"
 
         params["take"] = self.process(
-            requests.get(endpoint_url, params=params, headers=headers)
+            requests.get(
+                endpoint_url,
+                params=params,
+                headers=headers,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
+            )
         ).json()["total"]
         # Handle result of zero child folders
         if params["take"] != 0:
