@@ -27,11 +27,14 @@ PLATFORM_HEALTH = "/health"
 
 class FakeResponse:
     """Minimal stand-in for a ``requests.Response`` as consumed by
-    ``_validate_health_endpoint`` (reads ``.content`` and ``.json()``)."""
+    ``_validate_health_endpoint`` (reads ``.ok``, ``.json()`` and ``.text``)."""
 
-    def __init__(self, healthy):
+    def __init__(self, healthy, status_code=200):
         self._healthy = healthy
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
         self.content = b'{"Healthy": true}' if healthy else b"{}"
+        self.text = self.content.decode()
 
     def json(self):
         return {"Healthy": self._healthy}

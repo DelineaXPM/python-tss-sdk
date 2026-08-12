@@ -4,9 +4,17 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for PyPI Trusted Publishing (OIDC) below; no PYPI_API_TOKEN
+      # secret is used or needed once a trusted publisher is configured.
+      id-token: write
 
     steps:
     - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
@@ -18,14 +26,18 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install flit
+        python -m pip install --upgrade "pip>=26.2" # CVE-2026-8643, CVE-2026-6357, CVE-2026-13346, CVE-2026-3219
+        python -m pip install flit==3.12.0 # match flit_core pin in pyproject.toml
 
     - name: Build package
       run: flit build
 
     - name: Publish package
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      # SECURITY_REVIEW.md SDK-5 / DevPlan.md 3.3: migrated from a long-lived
+      # PYPI_API_TOKEN to PyPI Trusted Publishing (OIDC), and the action ref
+      # is now SHA-pinned (it was previously the mutable `release/v1` branch).
+      # REQUIRES: a trusted publisher for this repo + workflow file must be
+      # configured on pypi.org (project Settings -> Publishing) before this
+      # tag push will succeed. Coordinate with the PyPI project owner first;
+      # keep the PYPI_API_TOKEN repo secret until that is confirmed working.
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
