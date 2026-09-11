@@ -28,9 +28,4 @@ if __name__ == "__main__":
                 password: ********
                 template: {serverSecret.secret_template_name}""")
     except SecretServerError as error:
-        # ``.response`` is None for errors raised before or without an HTTP
-        # response (e.g. server-type detection failure); ``.message`` is
-        # always populated and already excludes any full response body.
-        print(error.message)
-        if error.response is not None:
-            print(f"HTTP {error.response.status_code}")
+        print(error.response.text)

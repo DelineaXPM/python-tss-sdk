@@ -79,7 +79,7 @@ authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...", "https://p
 
 #### Server-Type Detection
 
-Unless given an explicit `server_type`, an authorizer detects whether the `base_url` points at a Secret Server or a Platform instance by probing its health-check endpoints (`/api/v1/healthcheck` then `/health`). `AccessTokenAuthorizer` probes when it is constructed; `PasswordGrantAuthorizer` and `DomainPasswordGrantAuthorizer` probe on their first token request, so constructing one does not validate the URL. The result is cached per `base_url` for the lifetime of the process, so the probe pair normally fires once per `base_url`. `SecretServerV0` accepts the same `server_type` keyword and passes it to the authorizer it builds.
+By default every authorizer automatically detects whether the `base_url` points at a Secret Server or a Platform instance by probing its health-check endpoints (`/api/v1/healthcheck` then `/health`). The result is cached per `base_url` for the lifetime of the process, so the probe pair fires only once per `base_url`.
 
 You can skip detection entirely by passing an explicit `server_type` of either `"secret_server"` or `"platform"`. When supplied, no health-check probe is issued. This is recommended for callers that run each lookup in a fresh, short-lived process (for example, some Ansible lookup-plugin runtimes), where a fresh process cannot benefit from the in-process cache and the repeated unauthenticated probes can be rate-limited to `403` by the Delinea Platform WAF.
 
@@ -104,7 +104,7 @@ The SDK API requires an `Authorizer` and either a `tenant` or a `base_url`. In t
 
 ### Useage
 
-Instantiate the `SecretServerCloud` class with `tenant` or `base_url`, along with an `Authorizer` (when providing `tenant`, yoou may optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a `dict`.
+Instantiate the `SecretServerCloud` class with `tenant` or `base_url`, along with an `Authorizer` (when providing `tenant`, yoou may optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
 
 ##### With Secret Server
 ```python
@@ -158,7 +158,7 @@ from delinea.secrets.server import SecretServer
 secret_server = SecretServer(base_url="https://platform.delinea.app", authorizer=authorizer)
 ```
 
-Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and returns a `dict`:
+Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
 
 ```python
 secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
@@ -178,7 +178,7 @@ secret = ServerSecret(**secret_server.get_secret(os.getenv("TSS_SECRET_ID")))
 username = secret.fields['username'].value
 ```
 
-It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `dict`.
+It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `json` object.
 
 ```python
 secret = secret_server.get_secret_by_path(r"TSS_SECRET_PATH")
@@ -201,49 +201,6 @@ except SecretServerError as e:
 
 > Note: The `path` must be the full folder path and name of the secret.
 
-### File Attachments
-
-`get_secret()` and `get_secret_by_path()` fetch file attachments by default.
-Every field with a non-zero `fileAttachmentId` gets its `itemValue` replaced
-with a `FileAttachment` (importable from `delinea.secrets.server`): the file's
-bytes, plus `.content`, `.text` and `.encoding`. Releases up to 2.0.1 stored
-the `requests.Response` there, so every other member of it — `.status_code`,
-`.json()`, `.headers`, `.ok`, `.iter_content()` — now raises `AttributeError`.
-`.text` prefers a strict UTF-8 decode when the server declares Latin-1, which
-`requests` reports for any `text/*` body with no charset. `.filename` and
-`.encoding` carry what the server sent, or `None`.
-
-```python
-import os
-import pathlib
-
-secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
-downloads = pathlib.Path("downloads")
-downloads.mkdir(parents=True, exist_ok=True)
-
-for item in secret["items"]:
-    if item.get("fileAttachmentId"):
-        # `filename` is server data: name the file yourself rather than
-        # joining it into a path, and do not rely on the key being present.
-        target = downloads / f"{secret['id']}_{item['slug']}"
-        target.write_bytes(item["itemValue"].content)
-```
-
-Use `.content` for any attachment, and `.text` only for one you know is text.
-An empty attachment is falsy, like any empty `bytes`, so test
-`item.get("fileAttachmentId")` rather than the value itself. Some templates
-omit that key entirely, which is why the example reads it with `.get`.
-
-Treat the value as read-once. Every `bytes` operation on it — slicing,
-concatenation, `.strip()` — returns plain `bytes` and drops `.filename`,
-`.encoding` and `.text`, and two attachments with identical contents compare
-equal whatever their filenames. Copy what you need out before transforming.
-
-`repr()` of a `FileAttachment` reports its size, not its contents, so an
-attachment cannot leak through a log line. The secret's other field values are
-ordinary strings, so never log the secret itself. `json.dumps()` of a fetched
-secret raises on the bytes: pass `fetch_file_attachments=False` for JSON.
-
 ## Using Self-Signed Certificates
 
 When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environment variable should be set to the path of the certificate (in `.pem` format). This will negate the need to ignore SSL certificate verification, which makes your application vunerable. Please reference the [`requests` documentation](https://docs.python.org/3/library/ssl.html) for further details on the `REQUESTS_CA_BUNDLE` environment variable, should you require it.
@@ -264,18 +221,11 @@ python -m venv venv
 . venv/bin/activate
 
 # Install dependencies (runtime + test/build tooling)
-python -m pip install --upgrade "pip>=26.2"
+python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
 ```
 
-Most of the suite runs offline and needs no credentials or network access:
-
-```shell
-pytest tests/test_security_phase1.py tests/test_security_phase2.py \
-       tests/test_security_phase4.py tests/test_server_detection_cache.py
-```
-
-Valid credentials are required to run the live integration tests in `tests/test_server.py`. The credentials should be stored in environment variables or in a `.env` file:
+Valid credentials are required to run the unit tests. The credentials should be stored in environment variables or in a `.env` file:
 
 ```shell
 export TSS_USERNAME=myusername

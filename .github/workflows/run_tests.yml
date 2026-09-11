@@ -26,10 +26,8 @@ jobs:
 
       - name: Install Tox
         run: |
-          # Upgrading pip has to happen in the outer interpreter; a pin in a
-          # requirements file cannot replace the running pip.
-          python -m pip install --upgrade "pip>=26.2" # CVE-2026-8643, CVE-2026-6357, CVE-2026-13346, CVE-2026-3219
-          python -m pip install tox
+          python -m pip install --upgrade pip
+          pip install tox
 
       - name: Run Tox
         # Run tox using the version of Python in `PATH`

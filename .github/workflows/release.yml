@@ -33,7 +33,7 @@ jobs:
       run: flit build
 
     - name: Publish package
-      # Security review item SDK-5 (PR #98): migrated from a long-lived
+      # SECURITY_REVIEW.md SDK-5 / DevPlan.md 3.3: migrated from a long-lived
       # PYPI_API_TOKEN to PyPI Trusted Publishing (OIDC), and the action ref
       # is now SHA-pinned (it was previously the mutable `release/v1` branch).
       # REQUIRES: a trusted publisher for this repo + workflow file must be
