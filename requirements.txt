@@ -1,8 +1,8 @@
-requests==2.32.4
+requests==2.34.2
 tox
 pytest
 python-dotenv
 flit
-black
-urllib3==2.6.3 # not directly required, pinned by Snyk to avoid a vulnerability
+black==26.3.1
+urllib3==2.8.0 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp==3.23.0 # not directly required, pinned by Snyk to avoid a vulnerability
