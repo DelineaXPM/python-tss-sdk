@@ -31,7 +31,7 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 
 #### Password Authorization
 
-If using traditional `username` and `password` authentication to log in to your Secret Server either directly or through Platform, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token` or `/identity/api/oauth2/token/xpmplatform`, depending on whether a secret server or platform is used for authentication.
+If using traditional `username` and `password` authentication to log in to your Secret Server either directly or through Platform, you can pass the `PasswordGrantAuthorizer` into the `SecretServer` class at instantiation. The `PasswordGrantAuthorizer` requires a `base_url`, `username`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token` or `/identity/api/oauth2/token/xpmplatform`, depending on whether a secret server or platform is used for authentication. It also optionally takes a `server_type` (`"secret_server"` or `"platform"`) to skip automatic server-type detection — see [Server-Type Detection](#server-type-detection).
 
 ##### With Secret Server
 ```python
@@ -50,7 +50,7 @@ authorizer = PasswordGrantAuthorizer("https://platform.delinea.app", os.getenv("
 
 #### Domain Authorization
 
-To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`. It is applicable only when authentication is done using a secret server.
+To use a domain credential, use the `DomainPasswordGrantAuthorizer`. It requires a `base_url`, `username`, `domain`, and `password`. It optionally takes a `token_path_uri`, but defaults to `/oauth2/token`, and a `server_type` (see [Server-Type Detection](#server-type-detection)). It is applicable only when authentication is done using a secret server.
 
 ```python
 from delinea.secrets.server import DomainPasswordGrantAuthorizer
@@ -60,7 +60,9 @@ authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", os.g
 
 #### Access Token Authorization
 
-If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`. The `AccessTokenAuthorizer` requires a `access_token` and `base_url`.
+If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`. The `AccessTokenAuthorizer` requires a `access_token` and `base_url`. It optionally takes a `server_type` (see [Server-Type Detection](#server-type-detection)).
+
+> **Upgrading from 2.0.0:** the second positional parameter changed from `server_type` to `base_url` in 2.0.1, which shipped as a patch release and did not document the change. Code written for 2.0.0 as `AccessTokenAuthorizer(token, "secret_server")` still runs on 2.0.1, but silently uses `"secret_server"` as the base URL. Since 3.0.0 `server_type` is keyword-only, so that call raises `TypeError` instead of failing quietly.
 
 ##### With Secret Server
 ```python
@@ -77,6 +79,42 @@ from delinea.secrets.server import AccessTokenAuthorizer
 authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...", "https://platform.delinea.app")
 ```
 
+#### Server-Type Detection
+
+Unless given an explicit `server_type`, an authorizer detects whether the `base_url` points at a Secret Server or a Platform instance by probing its health-check endpoints (`/api/v1/healthcheck` then `/health`). `AccessTokenAuthorizer` probes when it is constructed; `PasswordGrantAuthorizer` and `DomainPasswordGrantAuthorizer` probe on their first token request, so constructing one does not validate the URL. The result is cached per `base_url` for the lifetime of the process, so the probe pair normally fires once per `base_url`. `SecretServerV0` accepts the same `server_type` keyword and passes it to the authorizer it builds.
+
+You can skip detection entirely by passing an explicit `server_type` of either `"secret_server"` or `"platform"`. When supplied, no health-check probe is issued. The parameter is **keyword-only** — write `server_type="platform"`, never positionally — on every class that accepts it. Skipping detection is recommended whenever the probes cannot get through, or are simply not wanted:
+
+- Callers that run each lookup in a fresh, short-lived process (for example, some Ansible lookup-plugin runtimes). A fresh process cannot benefit from the in-process cache, and the repeated unauthenticated probes can be rate-limited to `403` by the Delinea Platform WAF.
+- On-premises deployments where IIS intercepts the anonymous probe and answers `302` to a login page — see [When detection fails](#when-detection-fails).
+
+```python
+from delinea.secrets.server import AccessTokenAuthorizer
+
+# No health-check probe is issued; the type is used directly.
+authorizer = AccessTokenAuthorizer(
+    "AgJ1slfZsEng9bKsssB-tic0Kh8I...",
+    "https://platform.delinea.app",
+    server_type="platform",
+)
+```
+
+An explicit `server_type` applies only to the instance that supplies it and is never written to the shared cache, so it cannot affect auto-detection for other authorizers. If a `base_url` is ever re-provisioned to a different server type while a long-lived process is running, call `Authorizer.clear_server_type_cache()` to force re-detection.
+
+##### When detection fails
+
+If neither health-check endpoint reports a healthy server, the SDK raises `SecretServerError` before any credentials are sent.
+
+Probes are never followed across a redirect, because a login page returning `200` would otherwise be read as an unhealthy server and hide the real cause. When a probe is redirected the error says so and names the destination:
+
+```text
+Unable to detect server type: the health check was redirected to
+https://hostname/Login.aspx (likely a login page). Pass
+server_type='secret_server' or 'platform' to skip detection.
+```
+
+This is most often IIS sending the anonymous request to `Login.aspx` because site-level Windows Authentication or a forms-auth `<location>` rule catches `/api/*`. Passing an explicit `server_type` is the immediate fix. The health-check endpoint is meant to be anonymous, so a redirect is also worth raising with whoever owns the IIS configuration.
+
 ## Secret Server Cloud
 
 The SDK API requires an `Authorizer` and either a `tenant` or a `base_url`. In the case of plaform authentication, only a `base_url` is supported.
@@ -85,7 +123,7 @@ The SDK API requires an `Authorizer` and either a `tenant` or a `base_url`. In t
 
 ### Useage
 
-Instantiate the `SecretServerCloud` class with `tenant` or `base_url`, along with an `Authorizer` (when providing `tenant`, yoou may optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a JSON encoded string.
+Instantiate the `SecretServerCloud` class with `tenant` or `base_url`, along with an `Authorizer` (when providing `tenant`, yoou may optionally include a `tld`). To retrieve a secret, pass an integer `id` to `get_secret()` which will return the secret as a `dict`.
 
 ##### With Secret Server
 ```python
@@ -139,7 +177,7 @@ from delinea.secrets.server import SecretServer
 secret_server = SecretServer(base_url="https://platform.delinea.app", authorizer=authorizer)
 ```
 
-Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and, returns a `json` object:
+Secrets can be fetched using the `get_secret` method, which takes an integer `id` of the secret and returns a `dict`:
 
 ```python
 secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
@@ -159,7 +197,7 @@ secret = ServerSecret(**secret_server.get_secret(os.getenv("TSS_SECRET_ID")))
 username = secret.fields['username'].value
 ```
 
-It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `json` object.
+It is also now possible to fetch a secret by the secrets `path` using the `get_secret_by_path` method on the `SecretServer` object. This, too, returns a `dict`.
 
 ```python
 secret = secret_server.get_secret_by_path(r"TSS_SECRET_PATH")
@@ -182,13 +220,56 @@ except SecretServerError as e:
 
 > Note: The `path` must be the full folder path and name of the secret.
 
+### File Attachments
+
+`get_secret()` and `get_secret_by_path()` fetch file attachments by default.
+Every field with a non-zero `fileAttachmentId` gets its `itemValue` replaced
+with a `FileAttachment` (importable from `delinea.secrets.server`): the file's
+bytes, plus `.content`, `.text` and `.encoding`. Releases up to 2.0.1 stored
+the `requests.Response` there, so every other member of it — `.status_code`,
+`.json()`, `.headers`, `.ok`, `.iter_content()` — now raises `AttributeError`.
+`.text` prefers a strict UTF-8 decode when the server declares Latin-1, which
+`requests` reports for any `text/*` body with no charset. `.filename` and
+`.encoding` carry what the server sent, or `None`.
+
+```python
+import os
+import pathlib
+
+secret = secret_server.get_secret(os.getenv("TSS_SECRET_ID"))
+downloads = pathlib.Path("downloads")
+downloads.mkdir(parents=True, exist_ok=True)
+
+for item in secret["items"]:
+    if item.get("fileAttachmentId"):
+        # `filename` is server data: name the file yourself rather than
+        # joining it into a path, and do not rely on the key being present.
+        target = downloads / f"{secret['id']}_{item['slug']}"
+        target.write_bytes(item["itemValue"].content)
+```
+
+Use `.content` for any attachment, and `.text` only for one you know is text.
+An empty attachment is falsy, like any empty `bytes`, so test
+`item.get("fileAttachmentId")` rather than the value itself. Some templates
+omit that key entirely, which is why the example reads it with `.get`.
+
+Treat the value as read-once. Every `bytes` operation on it — slicing,
+concatenation, `.strip()` — returns plain `bytes` and drops `.filename`,
+`.encoding` and `.text`, and two attachments with identical contents compare
+equal whatever their filenames. Copy what you need out before transforming.
+
+`repr()` of a `FileAttachment` reports its size, not its contents, so an
+attachment cannot leak through a log line. The secret's other field values are
+ordinary strings, so never log the secret itself. `json.dumps()` of a fetched
+secret raises on the bytes: pass `fetch_file_attachments=False` for JSON.
+
 ## Using Self-Signed Certificates
 
 When using a self-signed certificate for SSL, the `REQUESTS_CA_BUNDLE` environment variable should be set to the path of the certificate (in `.pem` format). This will negate the need to ignore SSL certificate verification, which makes your application vunerable. Please reference the [`requests` documentation](https://docs.python.org/3/library/ssl.html) for further details on the `REQUESTS_CA_BUNDLE` environment variable, should you require it.
 
 ## Create a Build Environment (optional)
 
-The SDK requires [Python 3.8](https://www.python.org/downloads/) or higher.
+The SDK requires [Python 3.10](https://www.python.org/downloads/) or higher.
 
 First, ensure Python is in `$PATH`, then run:
 
@@ -201,12 +282,19 @@ cd python-tss-sdk
 python -m venv venv
 . venv/bin/activate
 
-# Install dependencies
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+# Install dependencies (runtime + test/build tooling)
+python -m pip install --upgrade "pip>=26.2"
+pip install -r requirements-dev.txt
 ```
 
-Valid credentials are required to run the unit tests. The credentials should be stored in environment variables or in a `.env` file:
+Most of the suite runs offline and needs no credentials or network access:
+
+```shell
+pytest tests/test_security_phase1.py tests/test_security_phase2.py \
+       tests/test_security_phase4.py tests/test_server_detection_cache.py
+```
+
+Valid credentials are required to run the live integration tests in `tests/test_server.py`. The credentials should be stored in environment variables or in a `.env` file:
 
 ```shell
 export TSS_USERNAME=myusername
