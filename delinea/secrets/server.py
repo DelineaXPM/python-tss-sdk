@@ -28,7 +28,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import requests
 
@@ -190,6 +190,28 @@ def _required_records(data, key, what, response):
             f"{what} did not return '{key}' as a list of objects", response
         )
     return records
+
+
+def _redirect_target(response):
+    """A redirect's destination, capped and stripped of its query string.
+
+    ``Location`` is server-controlled, and IIS appends a ``ReturnUrl`` echoing
+    the path it intercepted; neither belongs in an error message or a log line.
+    ``None`` when there is nothing usable to name.
+    """
+    try:
+        location = response.headers.get("Location")
+    except Exception:  # a response double, or headers that are not a mapping
+        return None
+    if not isinstance(location, str) or not location:
+        return None
+    try:
+        parsed = urlsplit(location)
+    except ValueError:  # unclosed IPv6 bracket, NFKC-changing netloc
+        return None
+    return _safe_body_excerpt(
+        urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    )
 
 
 def _describe_response(response):
@@ -718,24 +740,51 @@ class Authorizer(ABC):
         :raise :class:`SecretServerError` when neither endpoint reports a
                 healthy status.
         """
-        if self._validate_health_endpoint(_join_url(base_url, "/api/v1/healthcheck")):
+        redirects = []
+        if self._validate_health_endpoint(
+            _join_url(base_url, "/api/v1/healthcheck"), redirects
+        ):
             return "secret_server"
-        if self._validate_health_endpoint(_join_url(base_url, "/health")):
+        if self._validate_health_endpoint(_join_url(base_url, "/health"), redirects):
             return "platform"
+        if redirects:
+            # An intercepted probe is a deployment problem, not an unhealthy
+            # server. Saying so, and naming the way out, saves the caller from
+            # debugging a health check that was never reached.
+            target = next((where for where in redirects if where), None)
+            destination = f" to {target}" if target else ""
+            raise SecretServerError(
+                "Unable to detect server type: the health check was redirected"
+                f"{destination} (likely a login page). Pass "
+                "server_type='secret_server' or 'platform' to skip detection."
+            )
         raise SecretServerError(
             "Unable to detect server type via health check endpoints."
         )
 
-    def _validate_health_endpoint(self, url):
+    def _validate_health_endpoint(self, url, redirects=None):
         """Validates if an endpoint returns healthy status.
 
         Requires a 2xx and one of the two shapes the products emit: ``Healthy``
         true in a JSON object, or a body that is exactly ``healthy``.
+
+        A 3xx is never a health answer, so redirects are not followed; each one
+        is recorded in ``redirects`` (when given) for the caller's error.
         """
         try:
-            response = requests.get(url, timeout=DEFAULT_REQUEST_TIMEOUT)
+            response = requests.get(
+                url, timeout=DEFAULT_REQUEST_TIMEOUT, allow_redirects=False
+            )
         except Exception as exc:
             logger.debug("Health probe to %s failed: %s", url, type(exc).__name__)
+            return False
+
+        if 300 <= response.status_code < 400:
+            # Following this lands on a login page whose 200 would otherwise
+            # read as "unhealthy", hiding the fact that IIS intercepted us.
+            logger.debug("Health probe to %s was redirected; not a health answer.", url)
+            if redirects is not None:
+                redirects.append(_redirect_target(response))
             return False
 
         # Explicit 2xx: ``response.ok`` is true for anything under 400, which
@@ -814,7 +863,7 @@ class AccessTokenAuthorizer(Authorizer):
             "instead; use copy.deepcopy() for an in-memory copy."
         )
 
-    def __init__(self, access_token, base_url, server_type=None):
+    def __init__(self, access_token, base_url, *, server_type=None):
         """
         :param server_type: optionally ``"secret_server"`` or ``"platform"`` to
                 skip health-check detection entirely (no probe is issued).
@@ -971,6 +1020,7 @@ class PasswordGrantAuthorizer(Authorizer):
         password,
         token_path_uri=None,
         domain=None,
+        *,
         server_type=None,
     ):
         """
@@ -1056,6 +1106,7 @@ class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
         domain,
         password,
         token_path_uri=None,
+        *,
         server_type=None,
     ):
         super().__init__(
@@ -1507,6 +1558,7 @@ class SecretServerV0(SecretServer):
         password,
         api_path_uri=SecretServer.API_PATH_URI,
         token_path_uri=None,
+        *,
         server_type=None,
     ):
         """

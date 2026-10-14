@@ -30,11 +30,12 @@ class FakeResponse:
     body was given; pass ``json_data=JSON_NULL`` for a body of ``null``.
     """
 
-    def __init__(self, status_code=200, json_data=None, text=None):
+    def __init__(self, status_code=200, json_data=None, text=None, headers=None):
         self.status_code = status_code
         # Mirrors ``requests.Response.ok``: true for anything under 400, so a
         # test cannot pass here while production treats a 3xx differently.
         self.ok = status_code < 400
+        self.headers = dict(headers or {})
         self._has_json = json_data is not None
         self._json = None if json_data is JSON_NULL else json_data
         if text is not None:
@@ -123,6 +124,19 @@ class EncodinglessResponse(AttachmentResponse):
 def health_response(healthy, status_code=200):
     """A health-check response as ``_validate_health_endpoint`` reads it."""
     return FakeResponse(status_code=status_code, json_data={"Healthy": bool(healthy)})
+
+
+# The query string is deliberate: IIS appends a ``ReturnUrl`` echoing the path
+# it intercepted, and the SDK must not quote that back into an error message.
+LOGIN_REDIRECT_LOCATION = "https://ss.example.com/Login.aspx?ReturnUrl=%2fapi%2fv1"
+
+
+def redirect_response(location=LOGIN_REDIRECT_LOCATION, status_code=302):
+    """A redirect, as IIS answers an anonymous probe it has intercepted.
+
+    ``requests`` would follow this to a 200 login page; the SDK must not.
+    """
+    return FakeResponse(status_code=status_code, headers={"Location": location})
 
 
 def vault_broker_payload(vault_url="https://vault.example.com"):

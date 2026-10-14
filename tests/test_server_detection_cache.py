@@ -4,7 +4,9 @@ The network is mocked by patching ``delinea.secrets.server.requests.get``, so
 no live credentials are needed. ``clear_detection_cache`` isolates the cache.
 """
 
+import inspect
 import threading
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -13,17 +15,24 @@ from delinea.secrets.server import (
     DEFAULT_REQUEST_TIMEOUT,
     AccessTokenAuthorizer,
     Authorizer,
+    DomainPasswordGrantAuthorizer,
     PasswordGrantAuthorizer,
+    SecretServer,
     SecretServerError,
+    SecretServerV0,
 )
 from fakes import (
     HTTP_GET,
     HTTP_POST,
+    LOGIN_REDIRECT_LOCATION,
     TOKEN_FROM_FAKE_ENDPOINT,
+    FakeResponse,
     HostileBody,
     fake_token_post,
     health_response,
     join_all,
+    redirect_response,
+    vault_broker_response,
 )
 
 # Shared fixtures from tests/conftest.py: fail loudly on an unmocked HTTP
@@ -247,6 +256,165 @@ def test_password_grant_override_skips_detection(monkeypatch):
     assert counter["total"] == 0
     # Platform token endpoint was selected without any health probe.
     assert grant.token_path_uri == PasswordGrantAuthorizer.PLATFORM_TOKEN_PATH_URI
+
+
+# SP-001 Behavior 1: the mirror of Behavior 10 for the other type. Only the
+# platform branch pinned its token endpoint, so a swap of the two constants
+# would have gone unnoticed on the secret_server side.
+def test_secret_server_override_selects_the_secret_server_token_endpoint(monkeypatch):
+    fake_get, counter = make_probe_counter(set())
+    monkeypatch.setattr(HTTP_GET, fake_get)
+
+    grant = PasswordGrantAuthorizer(
+        "https://ss.example.com", "user", "pass", server_type="secret_server"
+    )
+    monkeypatch.setattr(HTTP_POST, fake_token_post)
+
+    assert grant.get_access_token() == TOKEN_FROM_FAKE_ENDPOINT
+    assert counter["total"] == 0
+    assert grant.token_path_uri == PasswordGrantAuthorizer.TOKEN_PATH_URI
+
+
+# SP-001 Behavior 8: ``server_type`` is keyword-only everywhere it is accepted.
+#
+# 2.0.0 took ``AccessTokenAuthorizer(access_token, server_type)``; 2.0.1 made the
+# second positional parameter ``base_url``. 2.0.0-era code therefore still runs
+# today but silently uses ``"secret_server"`` as the base URL. Keyword-only makes
+# that mix-up impossible in either direction.
+SERVER_TYPE_CONSTRUCTORS = [
+    pytest.param(
+        AccessTokenAuthorizer,
+        ("tok", "https://x.example.com", "platform"),
+        id="AccessTokenAuthorizer",
+    ),
+    pytest.param(
+        PasswordGrantAuthorizer,
+        ("https://x.example.com", "user", "pass", None, None, "platform"),
+        id="PasswordGrantAuthorizer",
+    ),
+    pytest.param(
+        DomainPasswordGrantAuthorizer,
+        ("https://x.example.com", "user", "domain", "pass", None, "platform"),
+        id="DomainPasswordGrantAuthorizer",
+    ),
+    pytest.param(
+        SecretServerV0,
+        ("https://x.example.com", "user", "pass", "/api/v1", None, "platform"),
+        id="SecretServerV0",
+    ),
+]
+
+
+@pytest.mark.parametrize("cls, args", SERVER_TYPE_CONSTRUCTORS)
+def test_server_type_cannot_be_passed_positionally(monkeypatch, cls, args):
+    """A positional ``server_type`` must raise, never bind to another parameter."""
+    fake_get, counter = make_probe_counter(set())
+    monkeypatch.setattr(HTTP_GET, fake_get)
+
+    with pytest.raises(TypeError):
+        cls(*args)
+
+    assert counter["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [param.values[0] for param in SERVER_TYPE_CONSTRUCTORS],
+    ids=lambda c: c.__name__,
+)
+def test_server_type_is_declared_keyword_only(cls):
+    """The signature carries the guarantee, for callers that introspect it.
+
+    ``ansible-ss-collection`` locates this parameter by name through
+    ``inspect.signature`` before passing it, so its kind is part of the contract.
+    """
+    parameter = inspect.signature(cls.__init__).parameters["server_type"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# SP-001 Behavior 9: a probe must not follow redirects. IIS answers an anonymous
+# GET with 302 -> Login.aspx; following it yields a 200 login page, which then
+# fails the body check and reports as "unhealthy" rather than "intercepted".
+def test_health_probes_do_not_follow_redirects(monkeypatch):
+    followed = []
+
+    def fake_get(url, *args, **kwargs):
+        followed.append(kwargs.get("allow_redirects"))
+        return health_response(url.endswith(PLATFORM_HEALTH))
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+
+    AccessTokenAuthorizer("tok", "https://x.example.com")
+
+    assert followed, "no probe was issued"
+    assert all(flag is False for flag in followed)
+
+
+# SP-001 Behavior 4: the customer's case. Both probes are intercepted, so the
+# error has to name the redirect and the way out, not just "unable to detect".
+def test_redirected_probes_name_the_redirect_and_the_escape_hatch(monkeypatch):
+    monkeypatch.setattr(HTTP_GET, lambda *args, **kwargs: redirect_response())
+
+    with pytest.raises(SecretServerError) as raised:
+        AccessTokenAuthorizer("tok", "https://ss.example.com")
+
+    message = str(raised.value)
+    assert "redirect" in message.lower()
+    assert "server_type" in message
+    assert "Login.aspx" in message
+
+
+# A ``Location`` is server-controlled and its ``ReturnUrl`` echoes the path that
+# was intercepted, so the quoted target must be stripped of its query string.
+def test_a_redirect_target_is_quoted_without_its_query_string(monkeypatch):
+    monkeypatch.setattr(HTTP_GET, lambda *args, **kwargs: redirect_response())
+
+    with pytest.raises(SecretServerError) as raised:
+        AccessTokenAuthorizer("tok", "https://ss.example.com")
+
+    message = str(raised.value)
+    assert "ReturnUrl" not in message
+    assert urlsplit(LOGIN_REDIRECT_LOCATION).query not in message
+
+
+# A 3xx carrying no usable ``Location`` is still a failed probe, and the error
+# must not blow up trying to describe it.
+def test_a_redirect_without_a_location_still_fails_cleanly(monkeypatch):
+    monkeypatch.setattr(HTTP_GET, lambda *args, **kwargs: FakeResponse(status_code=302))
+
+    with pytest.raises(SecretServerError) as raised:
+        AccessTokenAuthorizer("tok", "https://ss.example.com")
+
+    assert "server_type" in str(raised.value)
+
+
+# SP-001 Behavior 2, the clause the Phase 1 audit found unasserted: skipping
+# detection must not also skip the Platform vault lookup, which selects the
+# base_url every later API call uses.
+def test_platform_override_still_fetches_the_vault_url(monkeypatch):
+    base_url = "https://platform.example.com"
+    probe_get, counter = make_probe_counter(set())
+    paths = []
+
+    def fake_get(url, *args, **kwargs):
+        paths.append(urlsplit(url).path)
+        if url.endswith("/vaultbroker/api/vaults"):
+            return vault_broker_response()
+        return probe_get(url, *args, **kwargs)
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+    monkeypatch.setattr(HTTP_POST, fake_token_post)
+
+    authorizer = PasswordGrantAuthorizer(
+        base_url, "user", "pass", server_type="platform"
+    )
+    server = SecretServer(base_url, authorizer)
+    server.ensure_vault_url()
+
+    assert counter["total"] == 0  # detection really was skipped
+    assert "/vaultbroker/api/vaults" in paths  # but the vault lookup still ran
+    assert server.base_url == "https://vault.example.com"
 
 
 # Behavior 11: the cache is bounded; the least-recently-used entry is evicted.

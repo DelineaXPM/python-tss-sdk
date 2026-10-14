@@ -62,6 +62,8 @@ authorizer = DomainPasswordGrantAuthorizer("https://hostname/SecretServer", os.g
 
 If you already have an `access_token` of Secret Server or Platform user, you can pass directly via the `AccessTokenAuthorizer`. The `AccessTokenAuthorizer` requires a `access_token` and `base_url`. It optionally takes a `server_type` (see [Server-Type Detection](#server-type-detection)).
 
+> **Upgrading from 2.0.0:** the second positional parameter changed from `server_type` to `base_url` in 2.0.1, which shipped as a patch release and did not document the change. Code written for 2.0.0 as `AccessTokenAuthorizer(token, "secret_server")` still runs on 2.0.1, but silently uses `"secret_server"` as the base URL. Since 3.0.0 `server_type` is keyword-only, so that call raises `TypeError` instead of failing quietly.
+
 ##### With Secret Server
 ```python
 from delinea.secrets.server import AccessTokenAuthorizer
@@ -81,7 +83,10 @@ authorizer = AccessTokenAuthorizer("AgJ1slfZsEng9bKsssB-tic0Kh8I...", "https://p
 
 Unless given an explicit `server_type`, an authorizer detects whether the `base_url` points at a Secret Server or a Platform instance by probing its health-check endpoints (`/api/v1/healthcheck` then `/health`). `AccessTokenAuthorizer` probes when it is constructed; `PasswordGrantAuthorizer` and `DomainPasswordGrantAuthorizer` probe on their first token request, so constructing one does not validate the URL. The result is cached per `base_url` for the lifetime of the process, so the probe pair normally fires once per `base_url`. `SecretServerV0` accepts the same `server_type` keyword and passes it to the authorizer it builds.
 
-You can skip detection entirely by passing an explicit `server_type` of either `"secret_server"` or `"platform"`. When supplied, no health-check probe is issued. This is recommended for callers that run each lookup in a fresh, short-lived process (for example, some Ansible lookup-plugin runtimes), where a fresh process cannot benefit from the in-process cache and the repeated unauthenticated probes can be rate-limited to `403` by the Delinea Platform WAF.
+You can skip detection entirely by passing an explicit `server_type` of either `"secret_server"` or `"platform"`. When supplied, no health-check probe is issued. The parameter is **keyword-only** — write `server_type="platform"`, never positionally — on every class that accepts it. Skipping detection is recommended whenever the probes cannot get through, or are simply not wanted:
+
+- Callers that run each lookup in a fresh, short-lived process (for example, some Ansible lookup-plugin runtimes). A fresh process cannot benefit from the in-process cache, and the repeated unauthenticated probes can be rate-limited to `403` by the Delinea Platform WAF.
+- On-premises deployments where IIS intercepts the anonymous probe and answers `302` to a login page — see [When detection fails](#when-detection-fails).
 
 ```python
 from delinea.secrets.server import AccessTokenAuthorizer
@@ -95,6 +100,20 @@ authorizer = AccessTokenAuthorizer(
 ```
 
 An explicit `server_type` applies only to the instance that supplies it and is never written to the shared cache, so it cannot affect auto-detection for other authorizers. If a `base_url` is ever re-provisioned to a different server type while a long-lived process is running, call `Authorizer.clear_server_type_cache()` to force re-detection.
+
+##### When detection fails
+
+If neither health-check endpoint reports a healthy server, the SDK raises `SecretServerError` before any credentials are sent.
+
+Probes are never followed across a redirect, because a login page returning `200` would otherwise be read as an unhealthy server and hide the real cause. When a probe is redirected the error says so and names the destination:
+
+```text
+Unable to detect server type: the health check was redirected to
+https://hostname/Login.aspx (likely a login page). Pass
+server_type='secret_server' or 'platform' to skip detection.
+```
+
+This is most often IIS sending the anonymous request to `Login.aspx` because site-level Windows Authentication or a forms-auth `<location>` rule catches `/api/*`. Passing an explicit `server_type` is the immediate fix. The health-check endpoint is meant to be anonymous, so a redirect is also worth raising with whoever owns the IIS configuration.
 
 ## Secret Server Cloud
 
