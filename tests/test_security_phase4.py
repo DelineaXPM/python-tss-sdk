@@ -645,6 +645,40 @@ def test_an_empty_folder_returns_no_secret_ids(monkeypatch):
     assert server.get_secret_ids_by_folderid(2) == []
 
 
+# ``_required_records`` vouches that each record is an object; the ``id`` read
+# out of it needs the same guard, or a bare ``KeyError`` escapes the
+# ``SecretServerError`` these methods document as their only failure.
+def test_a_secrets_search_record_with_no_id_raises(monkeypatch):
+    def fake_get(url, *args, **kwargs):
+        if url.endswith("/secrets/search-total"):
+            return FakeResponse(text="1")
+        return FakeResponse(json_data={"records": [{"name": "no-id-here"}]})
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+    server = make_server("https://ss.example.com", "secret_server")
+
+    with pytest.raises(SecretServerError) as raised:
+        server.get_secret_ids_by_folderid(2)
+
+    assert "no 'id'" in str(raised.value)
+
+
+def test_a_folder_lookup_record_with_no_id_raises(monkeypatch):
+    """``get_child_folder_ids_by_folderid`` reads the same key the same way."""
+    monkeypatch.setattr(
+        HTTP_GET,
+        lambda *args, **kwargs: FakeResponse(
+            json_data={"total": 1, "records": [{"name": "x"}]}
+        ),
+    )
+    server = make_server("https://ss.example.com", "secret_server")
+
+    with pytest.raises(SecretServerError) as raised:
+        server.get_child_folder_ids_by_folderid(2)
+
+    assert "no 'id'" in str(raised.value)
+
+
 def test_an_item_without_a_file_attachment_id_is_left_alone(monkeypatch):
     """Absent, not zero: the key is missing for some templates.
 

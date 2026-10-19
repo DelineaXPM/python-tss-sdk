@@ -212,6 +212,8 @@ def test_vault_url_accepts_https(monkeypatch):
         # Looser matches, briefly accepted during review and then reverted:
         # neither product emits them, and a string ``"true"`` or a bare
         # ``"Healthy"`` is what an error page or captive portal may produce.
+        # The *key* is matched caselessly (see below); the value is not, and a
+        # bare JSON string is still not a health object at all.
         "Healthy",
         {"Healthy": "true"},
         {"Healthy": "false"},
@@ -221,10 +223,52 @@ def test_vault_url_accepts_https(monkeypatch):
         ["Healthy"],
         1,
         0,
-        {"healthy": True},
     ],
 )
 def test_health_check_rejects_other_json_shapes(monkeypatch, json_data):
+    response = FakeResponse(status_code=200, json_data=json_data)
+    assert _probe(monkeypatch, response) is False
+
+
+# The key is matched caselessly, because Secret Server documents it as
+# ``healthy`` while builds in the field also send ``Healthy``. Reading only
+# ``Healthy`` made a documented, lowercase 12.1 body report unhealthy, which
+# sent detection on to ``/health`` and into the IIS login-page redirect.
+# ``{"healthy": True}`` was previously listed as a rejected shape above.
+@pytest.mark.parametrize(
+    "json_data",
+    [{"healthy": True}, {"Healthy": True}, {"HEALTHY": True}, {"hEaLtHy": True}],
+    ids=["lower", "title", "upper", "mixed"],
+)
+def test_health_check_accepts_the_healthy_key_in_any_case(monkeypatch, json_data):
+    response = FakeResponse(status_code=200, json_data=json_data)
+    assert _probe(monkeypatch, response) is True
+
+
+# Only the key is caseless. The value stays strictly boolean ``true``, and a
+# key that merely *contains* "healthy" is a different field entirely.
+@pytest.mark.parametrize(
+    "json_data",
+    [
+        {"healthy": False},
+        {"HEALTHY": False},
+        {"healthy": "true"},
+        {"healthy": 1},
+        {"databaseHealthy": True},
+        {"healthyNodes": True},
+        {},
+    ],
+    ids=[
+        "false-lower",
+        "false-upper",
+        "string-true",
+        "int-one",
+        "database-prefix",
+        "nodes-suffix",
+        "empty",
+    ],
+)
+def test_health_check_still_rejects_near_miss_objects(monkeypatch, json_data):
     response = FakeResponse(status_code=200, json_data=json_data)
     assert _probe(monkeypatch, response) is False
 

@@ -121,9 +121,13 @@ class EncodinglessResponse(AttachmentResponse):
         self.content = content
 
 
-def health_response(healthy, status_code=200):
-    """A health-check response as ``_validate_health_endpoint`` reads it."""
-    return FakeResponse(status_code=status_code, json_data={"Healthy": bool(healthy)})
+def health_response(healthy, status_code=200, key="Healthy"):
+    """A health-check response as ``_validate_health_endpoint`` reads it.
+
+    ``key`` defaults to the Title case builds in the field send; Secret Server
+    documents it lowercase, and the SDK matches it in any case.
+    """
+    return FakeResponse(status_code=status_code, json_data={key: bool(healthy)})
 
 
 # The query string is deliberate: IIS appends a ``ReturnUrl`` echoing the path

@@ -192,6 +192,21 @@ def _required_records(data, key, what, response):
     return records
 
 
+def _record_ids(records, what, response):
+    """Return the ``id`` of every record, or raise.
+
+    ``_required_records`` vouches for each record being an object; this vouches
+    for the one key read out of it, so a record missing ``id`` raises the
+    ``SecretServerError`` these methods document instead of a bare ``KeyError``.
+    """
+    ids = []
+    for record in records:
+        if "id" not in record:
+            raise SecretServerError(f"{what} returned a record with no 'id'", response)
+        ids.append(record["id"])
+    return ids
+
+
 def _redirect_target(response):
     """A redirect's destination, capped and stripped of its query string.
 
@@ -765,8 +780,9 @@ class Authorizer(ABC):
     def _validate_health_endpoint(self, url, redirects=None):
         """Validates if an endpoint returns healthy status.
 
-        Requires a 2xx and one of the two shapes the products emit: ``Healthy``
-        true in a JSON object, or a body that is exactly ``healthy``.
+        Requires a 2xx and one of the two shapes the products emit: a
+        ``healthy`` key -- in any case -- that is boolean ``true`` in a JSON
+        object, or a body that is exactly ``healthy``.
 
         A 3xx is never a health answer, so redirects are not followed; each one
         is recorded in ``redirects`` (when given) for the caller's error.
@@ -807,8 +823,9 @@ class Authorizer(ABC):
     def _body_reports_healthy(response):
         """Whether a 2xx health-check body reports a healthy server.
 
-        A JSON object whose ``Healthy`` is boolean ``true`` (Secret Server), or
-        a body that is exactly ``healthy`` (Platform). Anything else is not.
+        A JSON object whose ``healthy`` key -- in any case -- is boolean
+        ``true`` (Secret Server), or a body that is exactly ``healthy``
+        (Platform). Anything else is not.
         """
         try:
             json_data = response.json()
@@ -816,7 +833,16 @@ class Authorizer(ABC):
             json_data = None
 
         if isinstance(json_data, Mapping):
-            return json_data.get("Healthy") is True
+            # Secret Server documents the key as ``healthy``; builds in the
+            # field have also been seen sending ``Healthy``. Only the *key* is
+            # matched caselessly -- the value stays strict, so ``"true"`` and
+            # ``1`` remain unhealthy, and ``databaseHealthy`` is not this key.
+            reported = [
+                value
+                for key, value in json_data.items()
+                if isinstance(key, str) and key.casefold() == "healthy"
+            ]
+            return bool(reported) and all(value is True for value in reported)
         if json_data is not None:
             return False
 
@@ -1497,11 +1523,11 @@ class SecretServer:
             )
         secrets, response = self._get_json("/secrets", "Secrets search", params=params)
 
-        secret_ids = []
-        for secret in _required_records(secrets, "records", "Secrets search", response):
-            secret_ids.append(secret["id"])
-
-        return secret_ids
+        return _record_ids(
+            _required_records(secrets, "records", "Secrets search", response),
+            "Secrets search",
+            response,
+        )
 
     def get_child_folder_ids_by_folderid(self, folder_id):
         """Gets a list of child folder ids by folder_id
@@ -1537,7 +1563,7 @@ class SecretServer:
             "/folders/lookup", "Folder lookup", params=params
         )
         records = _required_records(page, "records", "Folder lookup", response)
-        return [child_folder["id"] for child_folder in records]
+        return _record_ids(records, "Folder lookup", response)
 
 
 class SecretServerV0(SecretServer):

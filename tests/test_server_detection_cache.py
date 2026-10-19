@@ -417,6 +417,30 @@ def test_platform_override_still_fetches_the_vault_url(monkeypatch):
     assert server.base_url == "https://vault.example.com"
 
 
+# Secret Server documents the health body with a lowercase ``healthy`` key.
+# Reading only ``Healthy`` made a documented body report unhealthy, so detection
+# fell through to ``/health`` -- which Secret Server redirects to Login.aspx,
+# producing the 302 a 12.1 customer reported as "Unable to detect server type".
+def test_a_lowercase_healthy_body_detects_secret_server_in_one_probe(monkeypatch):
+    requested = []
+
+    def fake_get(url, *args, **kwargs):
+        requested.append(urlsplit(url).path)
+        if url.endswith(SECRET_SERVER_HEALTH):
+            return health_response(True, key="healthy")
+        # What the customer's IIS actually does with /health.
+        return redirect_response()
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+
+    authorizer = AccessTokenAuthorizer("tok", "https://ss.example.com")
+
+    assert authorizer._server_type == "secret_server"
+    # Exactly one probe: /health is never reached, so its redirect cannot fail
+    # a detection the first endpoint already answered.
+    assert requested == [SECRET_SERVER_HEALTH]
+
+
 # Behavior 11: the cache is bounded; the least-recently-used entry is evicted.
 def test_cache_is_bounded_lru(monkeypatch):
     # Every base_url detects as platform (healthy /health) so each distinct URL
