@@ -23,10 +23,8 @@ if __name__ == "__main__":
     try:
         secret = secret_server_cloud.get_secret(os.getenv("TSS_SECRET_ID"))
         serverSecret = ServerSecret(**secret)
-        print(
-            f"""username: {serverSecret.fields['username'].value}
+        print(f"""username: {serverSecret.fields['username'].value}
                 password: {serverSecret.fields['password'].value}
-                template: {serverSecret.secret_template_name}"""
-        )
+                template: {serverSecret.secret_template_name}""")
     except SecretServerError as error:
         print(error.response.text)
