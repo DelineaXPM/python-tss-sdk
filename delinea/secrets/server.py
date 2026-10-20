@@ -272,7 +272,7 @@ class PasswordGrantAuthorizer(Authorizer):
         if (
             hasattr(self, "access_grant")
             and self.access_grant_refreshed
-            + timedelta(seconds=self.access_grant["expires_in"] + seconds_of_drift)
+            + timedelta(seconds=self.access_grant["expires_in"] - seconds_of_drift)
             > datetime.now()
         ):
             return
