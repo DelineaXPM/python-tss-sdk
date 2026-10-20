@@ -1,22 +1,25 @@
 [build-system]
-requires = ["flit_core ==3.12.0"]
+requires = ["flit_core >=3.12,<5"]
 build-backend = "flit_core.buildapi"
 
-[tool.flit.metadata]
-module = "delinea"
-author = "Delinea Integrations"
-author-email = "GitHub@delinea.com"
+[project]
+name = "python-tss-sdk"
+authors = [{name = "Delinea Integrations", email = "GitHub@delinea.com"}]
+license = "Apache-2.0"
+readme = "README.md"
+requires-python = ">=3.8"
+dynamic = ["version", "description"]
+dependencies = ["requests >= 2.12.5"]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11"
 ]
-description-file = "README.md"
-requires = [
-    "requests >= 2.12.5"
-]
-requires-python=">=3.8"
-dist-name = "python-tss-sdk"
+
+[project.urls]
+Homepage = "https://github.com/DelineaXPM/python-tss-sdk"
+
+[tool.flit.module]
+name = "delinea"
