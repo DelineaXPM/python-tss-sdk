@@ -26,6 +26,41 @@ There are three ways in which you can authorize the `SecretServer` and `SecretSe
 - Domain Authorization (with `DomainPasswordGrantAuthorizer`)
 - Access Token Authorization (with `AccessTokenAuthorizer`)
 
+### HTTPS is required
+
+Every `base_url` must use `https`. A plaintext URL raises `ValueError` at
+construction, before any request is issued:
+
+```python
+AccessTokenAuthorizer(token, "http://hostname/SecretServer")
+# ValueError: base_url 'http://hostname/SecretServer' does not use https;
+# credentials and bearer tokens would be sent unencrypted. Pass
+# allow_http=True to accept that for a lab or test server.
+```
+
+For a lab or test server, pass `allow_http=True`. It is keyword-only, and it
+downgrades the rejection to a `UserWarning` rather than silencing it:
+
+```python
+url = "http://localhost/SecretServer"
+authorizer = AccessTokenAuthorizer(token, url, allow_http=True)
+server = SecretServer(url, authorizer)  # inherits the opt-out from the authorizer
+```
+
+`SecretServer` and `SecretServerCloud` inherit `allow_http` from the authorizer
+when both were built for the same URL, so a single-URL setup states it once.
+Pass it explicitly on the client when the two URLs differ.
+
+The opt-out covers only the URL *you* supply. The Platform vault connection URL
+returned by the vault broker must always be `https`, whatever `allow_http` says —
+otherwise a compromised broker could downgrade every call that follows it.
+
+> **Upgrading from 2.0.1:** this is a breaking change. 2.0.1 only warned on
+> `http://`, and a `UserWarning` is invisible under the default filter after its
+> first firing. If you point the SDK at a plaintext lab server, add
+> `allow_http=True`; if you point it at production, the rejection is telling you
+> something worth fixing.
+
 ### Usage
 
 

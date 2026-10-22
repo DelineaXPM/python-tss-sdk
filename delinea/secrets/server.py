@@ -44,6 +44,10 @@ DEFAULT_REQUEST_TIMEOUT = 60
 _BODY_EXCERPT_LIMIT = 200
 _TRUNCATION_MARKER = "...[truncated]"
 
+# C0, DEL and C1. Escaped out of every body excerpt so server-controlled text
+# cannot inject a newline -- and with it a forged record -- into a log line.
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 # Cap on the server-supplied attachment filename echoed into a repr. Shorter
 # than a body excerpt: it identifies the file in a log line, nothing more.
 _FILENAME_EXCERPT_LIMIT = 60
@@ -106,31 +110,54 @@ def _caller_stacklevel():
     return level
 
 
-def _warn_if_insecure(base_url):
-    """Warn when ``base_url`` does not use ``https``.
+def _require_https(base_url, allow_http=False):
+    """Raise unless ``base_url`` uses ``https``; ``allow_http`` downgrades the
+    rejection to a warning.
 
-    Credentials and bearer tokens travel in plaintext otherwise; the warning is
-    attributed to the caller. TODO(v4.0): reject non-https, with an opt-out.
+    Credentials, bearer tokens and secret material travel in plaintext
+    otherwise. Plaintext also widens ``_reject_redirect``'s threat model: over
+    http an on-path attacker, not merely a compromised server, can emit the
+    redirect that would otherwise capture the grant. The opt-out still warns --
+    a lab asked for the risk, which is not a reason to hide it.
+
+    Only *operator-supplied* URLs come through here. The one server-supplied
+    URL, the vault connection, goes through ``_validated_vault_url``, which
+    requires https unconditionally: a lab flag must never let a compromised
+    broker downgrade every later call.
     """
     try:
         scheme = urlsplit(base_url).scheme
     except ValueError as exc:  # unclosed IPv6 bracket, NFKC-changing netloc
         raise ValueError(f"base_url {base_url!r} is not a valid URL: {exc}") from exc
-    if scheme.lower() != "https":
-        warnings.warn(
+    if scheme.lower() == "https":
+        return
+    if not allow_http:
+        raise ValueError(
             f"base_url {base_url!r} does not use https; credentials and "
-            "bearer tokens will be sent unencrypted.",
-            UserWarning,
-            stacklevel=_caller_stacklevel(),
+            "bearer tokens would be sent unencrypted. Pass allow_http=True to "
+            "accept that for a lab or test server."
         )
+    warnings.warn(
+        f"base_url {base_url!r} does not use https; credentials and "
+        "bearer tokens will be sent unencrypted.",
+        UserWarning,
+        stacklevel=_caller_stacklevel(),
+    )
 
 
 def _safe_body_excerpt(text, limit=_BODY_EXCERPT_LIMIT):
     """Return a length-capped excerpt of a response body for use in error
-    messages, marked when truncated so it's clearly not the full body."""
+    messages, marked when truncated so it's clearly not the full body.
+
+    Control characters are escaped first: this text is server-controlled and
+    ends up in log lines, where a raw newline would let a hostile body forge a
+    log record of its own.
+    """
     if text is None:
         return ""
-    text = str(text)
+    text = _CONTROL_CHARACTERS.sub(
+        lambda match: f"\\x{ord(match.group()):02x}", str(text)
+    )
     if len(text) <= limit:
         return text
     return text[:limit] + _TRUNCATION_MARKER
@@ -226,6 +253,46 @@ def _redirect_target(response):
         return None
     return _safe_body_excerpt(
         urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    )
+
+
+def _scrub_request_credentials(response):
+    """Drop the credential-bearing parts of ``response.request``, in place.
+
+    ``SecretServerError`` carries the response, and that is a documented part
+    of the API, so the credential is removed rather than the response. On the
+    token path ``.request.body`` is the grant itself -- the password or the
+    client_secret. :meth:`SecretServerError.__reduce__` already keeps it out of
+    a pickle; this closes the live object, which APM exception capture and
+    locals-printing tracebacks read.
+    """
+    request = getattr(response, "request", None)
+    if request is None:
+        return
+    try:
+        request.body = None
+    except Exception:  # a response double, or a read-only attribute
+        logger.debug("Could not scrub the request body off a response.")
+    headers = getattr(request, "headers", None)
+    if hasattr(headers, "pop"):
+        headers.pop("Authorization", None)
+
+
+def _reject_redirect(response, what):
+    """Raise when ``response`` is a redirect rather than an answer.
+
+    Nothing in this SDK follows one. ``requests`` preserves the body across a
+    307/308 and strips only the ``Authorization`` *header*, so a redirected
+    token request would carry the grant -- the password or client_secret -- to
+    whatever host the redirect names; a redirected read would hand back that
+    host's answer as secret material.
+    """
+    if not 300 <= response.status_code < 400:
+        return
+    target = _redirect_target(response)
+    destination = f" to {target}" if target else ""
+    raise SecretServerError(
+        f"{what} was redirected{destination}; refusing to follow it.", response
     )
 
 
@@ -691,12 +758,13 @@ class Authorizer(ABC):
                 return self._lead_detection(key, flight)
 
             if flight.done.wait(timeout=_DETECTION_WAIT_TIMEOUT):
+                if flight.superseded:
+                    # A clear or a takeover retired this flight, so its outcome
+                    # no longer counts -- a success just as much as a failure.
+                    # The cache or the newer flight holds the current answer.
+                    continue
                 if flight.error is None:
                     return flight.server_type
-                if flight.superseded:
-                    # A clear or a takeover made this failure stale; the cache
-                    # or the newer flight holds the current answer.
-                    continue
                 raise self._shared_failure(flight.error) from flight.error
 
             logger.warning(
@@ -889,14 +957,19 @@ class AccessTokenAuthorizer(Authorizer):
             "instead; use copy.deepcopy() for an in-memory copy."
         )
 
-    def __init__(self, access_token, base_url, *, server_type=None):
+    def __init__(self, access_token, base_url, *, server_type=None, allow_http=False):
         """
         :param server_type: optionally ``"secret_server"`` or ``"platform"`` to
                 skip health-check detection entirely (no probe is issued).
+        :param allow_http: accept a non-https ``base_url``, which is rejected
+                by default. Lab and test servers only -- the bearer token, and
+                every secret it retrieves, then travel in plaintext.
         """
         self.access_token = access_token
         self.base_url = base_url.rstrip("/")
-        _warn_if_insecure(self.base_url)
+        self._allow_http = allow_http
+        # Before detection, so a probe cannot reach a plaintext URL either.
+        _require_https(self.base_url, allow_http)
         if server_type is None:
             # No keyword, so a subclass that still overrides the original
             # one-argument hook keeps working.
@@ -923,8 +996,15 @@ class PasswordGrantAuthorizer(Authorizer):
         """
 
         response = requests.post(
-            token_url, grant_request, timeout=DEFAULT_REQUEST_TIMEOUT
+            token_url,
+            grant_request,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+            allow_redirects=False,
         )
+        # Every raise below attaches ``response``, and this request's body is
+        # the grant. Scrub before anything can carry it into an exception.
+        _scrub_request_credentials(response)
+        _reject_redirect(response, "Token endpoint")
 
         try:  # TSS returns a 200 (OK) containing HTML for some error conditions
             # ``or b""``: ``.content`` is None when ``raw`` is, and
@@ -988,19 +1068,14 @@ class PasswordGrantAuthorizer(Authorizer):
             if not hasattr(self, "_server_type"):
                 self._perform_server_detection(self.base_url)
 
-            # Decide token_path_uri if not provided.
-            if not self.token_path_uri:
+            # One decision for both the endpoint and the grant shape. Deciding
+            # them separately let their defaults disagree, so an unexpected
+            # type posted a client_credentials body to the Secret Server token
+            # endpoint; an unknown type raises here instead of failing open.
+            if self._server_type == "secret_server":
                 # Resolved through ``self`` so a subclass that overrides either
                 # constant -- the pre-existing extension point -- is honoured.
-                self.token_path_uri = (
-                    self.PLATFORM_TOKEN_PATH_URI
-                    if self._server_type == "platform"
-                    else self.TOKEN_PATH_URI
-                )
-
-            self.token_url = _join_url(self.base_url, self.token_path_uri)
-
-            if self._server_type == "secret_server":
+                default_token_path = self.TOKEN_PATH_URI
                 grant_request = {
                     "username": self.username,
                     "password": self.password,
@@ -1008,13 +1083,24 @@ class PasswordGrantAuthorizer(Authorizer):
                 }
                 if self.domain:
                     grant_request["domain"] = self.domain
-            else:
+            elif self._server_type == "platform":
+                default_token_path = self.PLATFORM_TOKEN_PATH_URI
                 grant_request = {
                     "client_id": self.username,
                     "client_secret": self.password,
                     "grant_type": "client_credentials",
                     "scope": "xpmheadless",
                 }
+            else:
+                raise SecretServerError(
+                    "Unknown server type for token request: "
+                    f"{_safe_body_excerpt(repr(self._server_type))}"
+                )
+
+            if not self.token_path_uri:
+                self.token_path_uri = default_token_path
+
+            self.token_url = _join_url(self.base_url, self.token_path_uri)
 
             grant = self.get_access_grant(self.token_url, grant_request)
             lifetime = _expires_in_seconds(grant.get("expires_in"))
@@ -1048,14 +1134,19 @@ class PasswordGrantAuthorizer(Authorizer):
         domain=None,
         *,
         server_type=None,
+        allow_http=False,
     ):
         """
         :param server_type: optionally ``"secret_server"`` or ``"platform"`` to
                 skip health-check detection entirely (no probe is issued); the
                 matching token endpoint is selected without probing.
+        :param allow_http: accept a non-https ``base_url``, which is rejected
+                by default. Lab and test servers only -- the password is then
+                posted in plaintext.
         """
         self.base_url = base_url.rstrip("/")
-        _warn_if_insecure(self.base_url)
+        self._allow_http = allow_http
+        _require_https(self.base_url, allow_http)
         self.username = username
         self.password = password
         self.domain = domain
@@ -1134,6 +1225,7 @@ class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
         token_path_uri=None,
         *,
         server_type=None,
+        allow_http=False,
     ):
         super().__init__(
             base_url,
@@ -1142,6 +1234,7 @@ class DomainPasswordGrantAuthorizer(PasswordGrantAuthorizer):
             token_path_uri=token_path_uri,
             domain=domain,
             server_type=server_type,
+            allow_http=allow_http,
         )
 
 
@@ -1184,10 +1277,13 @@ class SecretServer:
                 message = _describe_response(response)
             else:
                 if isinstance(content, Mapping):
+                    # Capped like every other server string that reaches a
+                    # message: this is the most-travelled error path, and an
+                    # uncapped body here defeats ``_BODY_EXCERPT_LIMIT``.
                     if isinstance(content.get("message"), str):
-                        message = content["message"]
+                        message = _safe_body_excerpt(content["message"])
                     elif isinstance(content.get("error"), str):
-                        message = content["error"]
+                        message = _safe_body_excerpt(content["error"])
             raise SecretServerClientError(message, response)
         else:
             raise SecretServerServiceError(_describe_response(response), response)
@@ -1201,6 +1297,8 @@ class SecretServer:
         base_url,
         authorizer: Authorizer,
         api_path_uri=API_PATH_URI,
+        *,
+        allow_http=None,
     ):
         """
         :param base_url: The base URL e.g. ``https://localhost/SecretServer``
@@ -1209,12 +1307,20 @@ class SecretServer:
         :type authorizer: Authorizer
         :param api_path_uri: Defaults to ``/api/v1``
         :type api_path_uri: str
+        :param allow_http: accept a non-https ``base_url``, which is rejected
+                by default. Left ``None`` it is inherited from ``authorizer``
+                when that was built for this exact URL, so a one-URL setup
+                need not carry the keyword twice.
+        :type allow_http: bool or None
         """
         self.base_url = base_url.rstrip("/")
-        # An authorizer built for this same URL already warned; a second
-        # identical warning only ever shows up under ``-W always``.
-        if getattr(authorizer, "base_url", None) != self.base_url:
-            _warn_if_insecure(self.base_url)
+        # An authorizer built for this exact URL already ran the check and,
+        # under the opt-out, already warned; repeating either would only ever
+        # show up under ``-W always``. Its verdict stands unless the caller
+        # states one here -- including an explicit ``allow_http=False``.
+        built_for_this_url = getattr(authorizer, "base_url", None) == self.base_url
+        if allow_http is not None or not built_for_this_url:
+            _require_https(self.base_url, bool(allow_http))
         self.platform_url = self.base_url
         self.authorizer = authorizer
         self._api_path_uri = api_path_uri
@@ -1249,8 +1355,14 @@ class SecretServer:
 
         vaults_endpoint = _join_url(self.platform_url, "/vaultbroker/api/vaults")
         resp = requests.get(
-            vaults_endpoint, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
+            vaults_endpoint,
+            headers=headers,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+            allow_redirects=False,
         )
+        # This response chooses the base_url every later API call uses, so a
+        # redirect here would let another host nominate the vault.
+        _reject_redirect(resp, "Vault lookup")
         if resp.status_code != 200:
             raise SecretServerError(
                 f"Failed to fetch vault details: {_describe_response(resp)}", resp
@@ -1293,14 +1405,17 @@ class SecretServer:
         and :meth:`process`. ``params`` takes any form ``requests`` accepts.
         """
         self.ensure_vault_url()
-        return self.process(
-            requests.get(
-                _join_url(self.api_url, path),
-                params=params,
-                headers=self.headers(),
-                timeout=DEFAULT_REQUEST_TIMEOUT,
-            )
+        response = requests.get(
+            _join_url(self.api_url, path),
+            params=params,
+            headers=self.headers(),
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+            allow_redirects=False,
         )
+        # ``requests`` keeps the bearer token across a same-host redirect, and
+        # the redirect target's body would be returned as the secret.
+        _reject_redirect(response, f"GET {path}")
+        return self.process(response)
 
     def _get_json(self, path, what, params=None, *, redact_body=False):
         """``_get`` plus JSON parsing; returns ``(data, response)``.
@@ -1586,15 +1701,24 @@ class SecretServerV0(SecretServer):
         token_path_uri=None,
         *,
         server_type=None,
+        allow_http=False,
     ):
         """
         :param server_type: optionally ``"secret_server"`` or ``"platform"`` to
                 skip health-check detection, as on the authorizers.
+        :param allow_http: accept a non-https ``base_url``, as on the
+                authorizers. Given to the authorizer this builds; the client
+                half inherits it from there, so only one warning is emitted.
         """
         super().__init__(
             base_url,
             PasswordGrantAuthorizer(
-                base_url, username, password, token_path_uri, server_type=server_type
+                base_url,
+                username,
+                password,
+                token_path_uri,
+                server_type=server_type,
+                allow_http=allow_http,
             ),
             api_path_uri,
         )
@@ -1614,7 +1738,20 @@ class SecretServerCloud(SecretServer):
     DEFAULT_TLD = "com"
     URL_TEMPLATE = "https://{}.secretservercloud.{}"
 
-    def __init__(self, tenant=None, authorizer=None, tld=DEFAULT_TLD, base_url=None):
+    def __init__(
+        self,
+        tenant=None,
+        authorizer=None,
+        tld=DEFAULT_TLD,
+        base_url=None,
+        *,
+        allow_http=None,
+    ):
+        """
+        :param allow_http: only reachable through ``base_url``; a ``tenant``
+                always builds an https URL from :attr:`URL_TEMPLATE`. ``None``
+                inherits from ``authorizer``, as on :class:`SecretServer`.
+        """
         if authorizer is None or not isinstance(authorizer, Authorizer):
             raise ValueError(
                 "authorizer must be provided and must be of type Authorizer"
@@ -1625,4 +1762,4 @@ class SecretServerCloud(SecretServer):
             url = base_url.rstrip("/")
         else:
             raise ValueError("Must provide either tenant or base_url")
-        super().__init__(url, authorizer)
+        super().__init__(url, authorizer, allow_http=allow_http)

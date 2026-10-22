@@ -1,16 +1,22 @@
 """Offline unit tests for the Phase 2 security-review fixes (see PR #98).
 
-Covers SDK-2 (a warning on plaintext http), SDK-4 (health checks need a 2xx and
-an exact match), SDK-6 (bodies capped in messages), SDK-7 (https vault URLs).
+Covers SDK-2 (plaintext http rejected, with an ``allow_http`` opt-out that
+warns), SDK-4 (health checks need a 2xx and an exact match), SDK-6 (bodies
+capped in messages), SDK-7 (https vault URLs).
 """
+
+import inspect
 
 import pytest
 
 from delinea.secrets.server import (
     AccessTokenAuthorizer,
+    DomainPasswordGrantAuthorizer,
     PasswordGrantAuthorizer,
     SecretServer,
+    SecretServerCloud,
     SecretServerError,
+    SecretServerV0,
 )
 from fakes import (
     HTTP_GET,
@@ -29,42 +35,168 @@ pytestmark = pytest.mark.usefixtures("no_network", "clear_detection_cache")
 
 
 # ---------------------------------------------------------------------------
-# SDK-2: warn on non-https base_url
+# SDK-2: reject a non-https base_url, with an explicit opt-out
 # ---------------------------------------------------------------------------
 
+HTTP_URL = "http://ss.example.com"
+HTTPS_URL = "https://ss.example.com"
 
-def test_access_token_authorizer_warns_on_http():
+
+def _access_token_authorizer(url, **kwargs):
+    return AccessTokenAuthorizer("tok", url, server_type="platform", **kwargs)
+
+
+def _password_grant_authorizer(url, **kwargs):
+    return PasswordGrantAuthorizer(
+        url, "user", "pass", server_type="platform", **kwargs
+    )
+
+
+def _domain_password_grant_authorizer(url, **kwargs):
+    return DomainPasswordGrantAuthorizer(
+        url, "user", "example.com", "pass", server_type="secret_server", **kwargs
+    )
+
+
+def _secret_server(url, **kwargs):
+    authorizer = AccessTokenAuthorizer("tok", HTTPS_URL, server_type="platform")
+    return SecretServer(url, authorizer, **kwargs)
+
+
+def _secret_server_v0(url, **kwargs):
+    return SecretServerV0(url, "user", "pass", server_type="secret_server", **kwargs)
+
+
+def _secret_server_cloud(url, **kwargs):
+    authorizer = AccessTokenAuthorizer("tok", HTTPS_URL, server_type="platform")
+    return SecretServerCloud(authorizer=authorizer, base_url=url, **kwargs)
+
+
+# Every public entry point that takes an operator-supplied base_url. Driven
+# from one list rather than spot-checked, so a new entry point cannot quietly
+# skip the scheme check -- the same reason the timeout and redirect rules are
+# pinned as invariants.
+BASE_URL_CONSTRUCTORS = [
+    pytest.param(_access_token_authorizer, id="AccessTokenAuthorizer"),
+    pytest.param(_password_grant_authorizer, id="PasswordGrantAuthorizer"),
+    pytest.param(_domain_password_grant_authorizer, id="DomainPasswordGrantAuthorizer"),
+    pytest.param(_secret_server, id="SecretServer"),
+    pytest.param(_secret_server_v0, id="SecretServerV0"),
+    pytest.param(_secret_server_cloud, id="SecretServerCloud"),
+]
+
+BASE_URL_CLASSES = [
+    AccessTokenAuthorizer,
+    PasswordGrantAuthorizer,
+    DomainPasswordGrantAuthorizer,
+    SecretServer,
+    SecretServerV0,
+    SecretServerCloud,
+]
+
+
+@pytest.mark.parametrize("build", BASE_URL_CONSTRUCTORS)
+def test_every_base_url_entry_point_rejects_http(build):
+    """The invariant: no entry point accepts plaintext by default."""
+    with pytest.raises(ValueError, match="does not use https"):
+        build(HTTP_URL)
+
+
+@pytest.mark.parametrize("build", BASE_URL_CONSTRUCTORS)
+def test_the_rejection_names_the_opt_out(build):
+    """A lab user has to be able to fix this without reading the source."""
+    with pytest.raises(ValueError, match="allow_http=True"):
+        build(HTTP_URL)
+
+
+@pytest.mark.parametrize("build", BASE_URL_CONSTRUCTORS)
+def test_every_base_url_entry_point_accepts_http_under_the_opt_out(build):
+    """Opting in is still worth a line in the log: it was asked for, not safe."""
     with pytest.warns(UserWarning, match="does not use https"):
-        AccessTokenAuthorizer("tok", "http://ss.example.com", server_type="platform")
+        build(HTTP_URL, allow_http=True)
 
 
-def test_access_token_authorizer_no_warning_on_https(recwarn):
-    AccessTokenAuthorizer("tok", "https://ss.example.com", server_type="platform")
-    assert len(recwarn) == 0
+@pytest.mark.parametrize("build", BASE_URL_CONSTRUCTORS)
+def test_https_is_accepted_silently(build, recwarn):
+    recwarn.clear()
+    build(HTTPS_URL)
+    assert [str(w.message) for w in recwarn] == []
 
 
-def test_password_grant_authorizer_warns_on_http():
-    with pytest.warns(UserWarning, match="does not use https"):
-        PasswordGrantAuthorizer(
-            "http://ss.example.com", "user", "pass", server_type="platform"
+@pytest.mark.parametrize("cls", BASE_URL_CLASSES, ids=lambda c: c.__name__)
+def test_allow_http_is_declared_keyword_only(cls):
+    """As with ``server_type``: a security opt-out is named at the call site,
+    never bound by position, and never by a caller that miscounted arguments."""
+    parameter = inspect.signature(cls).parameters["allow_http"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_a_malformed_url_still_raises_before_the_scheme_is_judged():
+    """``allow_http`` is not a licence to pass something that is not a URL."""
+    with pytest.raises(ValueError, match="is not a valid URL"):
+        AccessTokenAuthorizer(
+            "tok", "https://[oops", server_type="platform", allow_http=True
         )
 
 
-def test_secret_server_warns_on_http():
-    authorizer = AccessTokenAuthorizer(
-        "tok", "https://ss.example.com", server_type="platform"
-    )
+def test_the_client_inherits_the_opt_out_from_an_authorizer_for_the_same_url():
+    """One URL, one decision. Demanding the keyword on both halves would make
+    a correctly configured lab setup fail on its second line."""
     with pytest.warns(UserWarning, match="does not use https"):
-        SecretServer("http://ss.example.com", authorizer)
+        authorizer = AccessTokenAuthorizer(
+            "tok", HTTP_URL, server_type="platform", allow_http=True
+        )
+    assert SecretServer(HTTP_URL, authorizer).base_url == HTTP_URL
 
 
-def test_secret_server_no_warning_on_https(recwarn):
-    authorizer = AccessTokenAuthorizer(
-        "tok", "https://ss.example.com", server_type="platform"
-    )
+def test_the_client_does_not_inherit_the_opt_out_for_a_different_url():
+    """The authorizer vouched for its own URL, not for any other one."""
+    with pytest.warns(UserWarning, match="does not use https"):
+        authorizer = AccessTokenAuthorizer(
+            "tok", "http://auth.example.com", server_type="platform", allow_http=True
+        )
+    with pytest.raises(ValueError, match="does not use https"):
+        SecretServer("http://api.example.com", authorizer)
+
+
+def test_an_explicit_false_on_the_client_overrides_the_inherited_opt_out():
+    """``None`` means inherit; ``False`` means the caller decided."""
+    with pytest.warns(UserWarning, match="does not use https"):
+        authorizer = AccessTokenAuthorizer(
+            "tok", HTTP_URL, server_type="platform", allow_http=True
+        )
+    with pytest.raises(ValueError, match="does not use https"):
+        SecretServer(HTTP_URL, authorizer, allow_http=False)
+
+
+def test_a_cloud_tenant_is_https_whatever_allow_http_says(recwarn):
+    """``URL_TEMPLATE`` builds the URL, so the opt-out has nothing to reach."""
+    authorizer = AccessTokenAuthorizer("tok", HTTPS_URL, server_type="platform")
     recwarn.clear()
-    SecretServer("https://ss.example.com", authorizer)
-    assert len(recwarn) == 0
+    server = SecretServerCloud(tenant="acme", authorizer=authorizer, allow_http=True)
+    assert server.base_url.startswith("https://")
+    assert [str(w.message) for w in recwarn] == []
+
+
+def test_allow_http_does_not_relax_the_server_supplied_vault_url(monkeypatch):
+    """The opt-out covers the operator's own URL and stops there. The vault
+    connection URL comes from the broker, so honouring the flag there would let
+    a compromised broker downgrade every later call -- which is the whole point
+    of SDK-7."""
+    with pytest.warns(UserWarning, match="does not use https"):
+        authorizer = AccessTokenAuthorizer(
+            "tok",
+            "http://platform.example.com",
+            server_type="platform",
+            allow_http=True,
+        )
+    server = SecretServer("http://platform.example.com", authorizer)
+    monkeypatch.setattr(
+        HTTP_GET, lambda *a, **k: vault_broker_response("http://vault.example.com")
+    )
+
+    with pytest.raises(SecretServerError, match="not a valid https URL"):
+        server.ensure_vault_url()
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +430,7 @@ def _this_file():
 def test_direct_construction_warning_points_at_caller():
     with pytest.warns(UserWarning, match="does not use https") as record:
         AccessTokenAuthorizer(
-            "tok", "http://direct.example.com", server_type="platform"
+            "tok", "http://direct.example.com", server_type="platform", allow_http=True
         )
     assert _warning_basenames(record) == {_this_file()}
 
@@ -309,7 +441,7 @@ def test_legacy_wrapper_warning_points_at_caller():
     from delinea.secrets.server import SecretServerV0
 
     with pytest.warns(UserWarning, match="does not use https") as record:
-        SecretServerV0("http://legacy.example.com", "user", "pass")
+        SecretServerV0("http://legacy.example.com", "user", "pass", allow_http=True)
 
     assert _warning_basenames(record) == {_this_file()}
     assert "server.py" not in _warning_basenames(record)
@@ -322,7 +454,11 @@ def test_cloud_wrapper_warning_points_at_caller():
         "tok", "https://platform.example.com", server_type="platform"
     )
     with pytest.warns(UserWarning, match="does not use https") as record:
-        SecretServerCloud(authorizer=authorizer, base_url="http://cloud.example.com")
+        SecretServerCloud(
+            authorizer=authorizer,
+            base_url="http://cloud.example.com",
+            allow_http=True,
+        )
 
     assert _warning_basenames(record) == {_this_file()}
 
@@ -337,6 +473,7 @@ def test_domain_authorizer_warning_points_at_caller():
             "example.com",
             "pass",
             server_type="secret_server",
+            allow_http=True,
         )
 
     assert _warning_basenames(record) == {_this_file()}

@@ -29,6 +29,7 @@ from fakes import (
     health_response,
     make_grant_authorizer,
     make_server,
+    redirect_response,
     vault_broker_response,
 )
 
@@ -139,6 +140,192 @@ def test_every_http_call_site_passes_the_timeout(http_spy):
         if kwargs.get("timeout") != DEFAULT_REQUEST_TIMEOUT
     ]
     assert wrong == []
+
+
+def test_every_http_call_site_refuses_redirects(http_spy):
+    """No call here may follow a redirect, and the same lazily detected
+    Platform flow visits all five call sites.
+
+    ``requests`` preserves method and body across a 307/308 and strips only the
+    ``Authorization`` *header*, so a redirected token POST hands the password
+    or client_secret to whatever host the redirect names. Pinned as an
+    invariant, like the timeout above, so a new call site cannot omit it.
+    """
+    authorizer = PasswordGrantAuthorizer("https://platform.example.com", "u", "p")
+    server = SecretServer("https://platform.example.com", authorizer)
+    server.get_secret_json(1)
+
+    paths = {(method, urlsplit(url).path) for method, url, _ in http_spy}
+    assert paths == {
+        ("GET", "/api/v1/healthcheck"),
+        ("GET", "/health"),
+        ("POST", PasswordGrantAuthorizer.PLATFORM_TOKEN_PATH_URI),
+        ("GET", "/vaultbroker/api/vaults"),
+        ("GET", "/api/v1/secrets/1"),
+    }
+    following = [
+        (method, url)
+        for method, url, kwargs in http_spy
+        if kwargs.get("allow_redirects") is not False
+    ]
+    assert following == [], f"calls that would follow a redirect: {following}"
+
+
+def test_a_redirected_token_endpoint_raises_without_reading_the_body(monkeypatch):
+    """That POST carried the password; the redirect target must never see it."""
+    monkeypatch.setattr(HTTP_GET, lambda *args, **kwargs: health_response(True))
+    monkeypatch.setattr(HTTP_POST, lambda *args, **kwargs: redirect_response())
+
+    authorizer = PasswordGrantAuthorizer(
+        "https://ss.example.com", "user", "pass", server_type="secret_server"
+    )
+
+    with pytest.raises(SecretServerError) as raised:
+        authorizer.get_access_token()
+
+    assert "Token endpoint was redirected" in str(raised.value)
+    assert "Login.aspx" in str(raised.value)
+
+
+def test_a_redirected_vault_lookup_raises(monkeypatch):
+    """The vault response picks the base_url every later call uses, so a
+    redirect would let another host nominate the vault."""
+
+    def fake_get(url, *args, **kwargs):
+        if url.endswith("/vaultbroker/api/vaults"):
+            return redirect_response()
+        return health_response(True)
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+    monkeypatch.setattr(HTTP_POST, fake_token_post)
+
+    authorizer = PasswordGrantAuthorizer(
+        "https://platform.example.com", "user", "pass", server_type="platform"
+    )
+    server = SecretServer("https://platform.example.com", authorizer)
+
+    with pytest.raises(SecretServerError) as raised:
+        server.get_secret_json(1)
+
+    assert "Vault lookup was redirected" in str(raised.value)
+
+
+def test_a_redirected_api_read_raises(monkeypatch):
+    """``requests`` keeps the bearer token across a same-host redirect, and the
+    target's body would come back as the secret."""
+
+    def fake_get(url, *args, **kwargs):
+        if "/secrets/" in url:
+            return redirect_response()
+        return health_response(url.endswith("/api/v1/healthcheck"))
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+    monkeypatch.setattr(HTTP_POST, fake_token_post)
+
+    authorizer = PasswordGrantAuthorizer(
+        "https://ss.example.com", "user", "pass", server_type="secret_server"
+    )
+    server = SecretServer("https://ss.example.com", authorizer)
+
+    with pytest.raises(SecretServerError) as raised:
+        server.get_secret_json(1)
+
+    assert "was redirected" in str(raised.value)
+
+
+def test_an_unknown_server_type_raises_instead_of_mismatching_the_grant(monkeypatch):
+    """Deciding the token path and the grant shape separately let their
+    defaults disagree: a third value posted a ``client_credentials`` body to
+    the Secret Server token endpoint. 2.0.1 raised here; so does this.
+    """
+    posted = []
+
+    def fake_post(url, *args, **kwargs):
+        posted.append(url)
+        return fake_token_post(url, *args, **kwargs)
+
+    monkeypatch.setattr(HTTP_POST, fake_post)
+
+    authorizer = PasswordGrantAuthorizer("https://ss.example.com", "user", "pass")
+    # A subclass overriding the detection hook can set this; the hook is a
+    # deliberately preserved extension point, so the value is not normalized.
+    authorizer._server_type = "sEcReT_sErVeR"
+
+    with pytest.raises(SecretServerError) as raised:
+        authorizer.get_access_token()
+
+    assert "Unknown server type for token request" in str(raised.value)
+    assert posted == [], "credentials were sent despite the unknown server type"
+
+
+def test_a_token_error_does_not_carry_the_grant_body(monkeypatch):
+    """``.response`` is a documented API (SDK-9), so the credential is scrubbed
+    rather than the response withheld. ``__reduce__`` already keeps it out of a
+    pickle; this covers the live object APM capture and locals-printing
+    tracebacks read.
+    """
+
+    class _Request:
+        def __init__(self):
+            self.body = "username=u&password=sekrit&grant_type=password"
+            self.headers = {"Authorization": "Bearer live-token"}
+
+    class _UnparseableToken(FakeResponse):
+        def __init__(self):
+            super().__init__(status_code=200, text="not json at all")
+            self.request = _Request()
+
+    monkeypatch.setattr(HTTP_GET, lambda *args, **kwargs: health_response(True))
+    monkeypatch.setattr(HTTP_POST, lambda *args, **kwargs: _UnparseableToken())
+
+    authorizer = PasswordGrantAuthorizer(
+        "https://ss.example.com", "u", "sekrit", server_type="secret_server"
+    )
+
+    with pytest.raises(SecretServerError) as raised:
+        authorizer.get_access_token()
+
+    assert raised.value.response.request.body is None
+    assert "Authorization" not in raised.value.response.request.headers
+    assert "sekrit" not in str(raised.value)
+
+
+def test_a_4xx_message_is_capped_like_every_other_body_excerpt(monkeypatch):
+    """``process`` lifts the server's own ``message`` out of a 4xx body. It is
+    the most-travelled error path, so leaving it uncapped defeated the limit
+    every other path respects.
+    """
+    body = {"message": "D" * 500_000}
+    monkeypatch.setattr(
+        HTTP_GET,
+        lambda *args, **kwargs: FakeResponse(status_code=400, json_data=body),
+    )
+    server = make_server("https://ss.example.com", "secret_server")
+
+    with pytest.raises(SecretServerClientError) as raised:
+        server.get_secret_json(1)
+
+    assert len(str(raised.value)) < 1000
+    assert "...[truncated]" in str(raised.value)
+
+
+@pytest.mark.parametrize("key", ["message", "error"], ids=["message", "error"])
+def test_a_4xx_message_cannot_forge_a_log_line(monkeypatch, key):
+    """A raw newline in server text lets a hostile body write a log record of
+    its own into whatever SIEM ingests the consumer's logs."""
+    body = {key: "denied\r\nINFO auth: login succeeded for admin"}
+    monkeypatch.setattr(
+        HTTP_GET,
+        lambda *args, **kwargs: FakeResponse(status_code=403, json_data=body),
+    )
+    server = make_server("https://ss.example.com", "secret_server")
+
+    with pytest.raises(SecretServerClientError) as raised:
+        server.get_secret_json(1)
+
+    message = str(raised.value)
+    assert "\n" not in message and "\r" not in message
+    assert "\\x0a" in message  # escaped, not dropped
 
 
 def test_token_grant_passes_a_timeout(http_spy):

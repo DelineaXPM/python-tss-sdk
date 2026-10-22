@@ -1498,11 +1498,19 @@ def test_subclass_overriding_the_one_argument_detection_hook_still_works():
 
 def test_legacy_wrapper_emits_one_insecure_warning_even_under_always():
     """``SecretServerV0`` builds an authorizer and a client for one URL; only
-    one of them may warn, or ``-W always`` shows the same line twice."""
+    one of them may warn, or ``-W always`` shows the same line twice.
+
+    The opt-out is given once, to the wrapper; the client half inherits both
+    the verdict and the silence from the authorizer it built.
+    """
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         SecretServerV0(
-            "http://legacy.example.com", "u", "p", server_type="secret_server"
+            "http://legacy.example.com",
+            "u",
+            "p",
+            server_type="secret_server",
+            allow_http=True,
         )
     insecure = [w for w in record if "does not use https" in str(w.message)]
     assert len(insecure) == 1
@@ -1510,13 +1518,14 @@ def test_legacy_wrapper_emits_one_insecure_warning_even_under_always():
 
 def test_client_still_warns_for_its_own_insecure_url():
     """Suppression applies only when the authorizer already covered the same
-    URL; a different insecure client URL is still reported."""
+    URL; a different insecure client URL is still reported -- and needs its own
+    opt-out, because the authorizer never vouched for it."""
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         authorizer = AccessTokenAuthorizer(
-            "tok", "http://auth.example.com", server_type="platform"
+            "tok", "http://auth.example.com", server_type="platform", allow_http=True
         )
-        SecretServer("http://api.example.com", authorizer)
+        SecretServer("http://api.example.com", authorizer, allow_http=True)
     insecure = [
         str(w.message) for w in record if "does not use https" in str(w.message)
     ]

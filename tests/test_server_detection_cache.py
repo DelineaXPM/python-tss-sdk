@@ -258,7 +258,7 @@ def test_password_grant_override_skips_detection(monkeypatch):
     assert grant.token_path_uri == PasswordGrantAuthorizer.PLATFORM_TOKEN_PATH_URI
 
 
-# SP-001 Behavior 1: the mirror of Behavior 10 for the other type. Only the
+# The secret_server mirror of the platform token-endpoint test. Only the
 # platform branch pinned its token endpoint, so a swap of the two constants
 # would have gone unnoticed on the secret_server side.
 def test_secret_server_override_selects_the_secret_server_token_endpoint(monkeypatch):
@@ -275,7 +275,7 @@ def test_secret_server_override_selects_the_secret_server_token_endpoint(monkeyp
     assert grant.token_path_uri == PasswordGrantAuthorizer.TOKEN_PATH_URI
 
 
-# SP-001 Behavior 8: ``server_type`` is keyword-only everywhere it is accepted.
+# ``server_type`` is keyword-only everywhere it is accepted.
 #
 # 2.0.0 took ``AccessTokenAuthorizer(access_token, server_type)``; 2.0.1 made the
 # second positional parameter ``base_url``. 2.0.0-era code therefore still runs
@@ -333,9 +333,9 @@ def test_server_type_is_declared_keyword_only(cls):
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
 
-# SP-001 Behavior 9: a probe must not follow redirects. IIS answers an anonymous
-# GET with 302 -> Login.aspx; following it yields a 200 login page, which then
-# fails the body check and reports as "unhealthy" rather than "intercepted".
+# A probe must not follow redirects. IIS answers an anonymous GET with a
+# 302 -> Login.aspx; following it yields a 200 login page, which then fails the
+# body check and reports as "unhealthy" rather than "intercepted".
 def test_health_probes_do_not_follow_redirects(monkeypatch):
     followed = []
 
@@ -351,8 +351,8 @@ def test_health_probes_do_not_follow_redirects(monkeypatch):
     assert all(flag is False for flag in followed)
 
 
-# SP-001 Behavior 4: the customer's case. Both probes are intercepted, so the
-# error has to name the redirect and the way out, not just "unable to detect".
+# The reported customer case: both probes are intercepted, so the error has to
+# name the redirect and the way out, not just "unable to detect".
 def test_redirected_probes_name_the_redirect_and_the_escape_hatch(monkeypatch):
     monkeypatch.setattr(HTTP_GET, lambda *args, **kwargs: redirect_response())
 
@@ -389,9 +389,9 @@ def test_a_redirect_without_a_location_still_fails_cleanly(monkeypatch):
     assert "server_type" in str(raised.value)
 
 
-# SP-001 Behavior 2, the clause the Phase 1 audit found unasserted: skipping
-# detection must not also skip the Platform vault lookup, which selects the
-# base_url every later API call uses.
+# Skipping detection must not also skip the Platform vault lookup, which
+# selects the base_url every later API call uses. This clause went unasserted
+# until a review of this file caught it.
 def test_platform_override_still_fetches_the_vault_url(monkeypatch):
     base_url = "https://platform.example.com"
     probe_get, counter = make_probe_counter(set())
@@ -961,6 +961,73 @@ def test_waiter_bound_covers_connect_and_read_for_both_probes():
     """``requests`` applies its timeout per socket operation, so a live leader
     can spend two timeouts per probe; the waiter bound must allow for four."""
     assert _DETECTION_WAIT_TIMEOUT == 4 * DEFAULT_REQUEST_TIMEOUT + 5
+
+
+def test_waiter_on_a_superseded_flight_ignores_a_stale_success(monkeypatch):
+    """The success mirror of the test below.
+
+    A retired flight's outcome no longer counts -- and that has to include a
+    success. The ``superseded`` check once sat inside the failure branch, so a
+    waiter still took the discarded answer and used the wrong token endpoint
+    for its whole life: exactly the re-provisioned-``base_url`` case
+    ``clear_server_type_cache`` exists to serve.
+    """
+    import time
+
+    key = "https://superseded-success.example.com"
+    release_leader = threading.Event()
+    joined = threading.Event()
+
+    def fake_get(url, *args, **kwargs):
+        if threading.current_thread().name == "leader":
+            release_leader.wait(timeout=10)
+            # The stale leader succeeds, with the OTHER answer.
+            return health_response(url.endswith(SECRET_SERVER_HEALTH))
+        return health_response(url.endswith(PLATFORM_HEALTH))
+
+    monkeypatch.setattr(HTTP_GET, fake_get)
+    real_start = Authorizer._start_or_join_detection
+
+    def recording_start(k):
+        outcome = real_start(k)
+        if threading.current_thread().name == "waiter" and outcome[1] is not None:
+            joined.set()
+        return outcome
+
+    monkeypatch.setattr(
+        Authorizer, "_start_or_join_detection", staticmethod(recording_start)
+    )
+    results = {}
+
+    def detect(name):
+        try:
+            results[name] = AccessTokenAuthorizer("tok", key)._server_type
+        except SecretServerError as exc:
+            results[name] = exc
+
+    leader = threading.Thread(
+        target=detect, args=("leader",), name="leader", daemon=True
+    )
+    waiter = threading.Thread(
+        target=detect, args=("waiter",), name="waiter", daemon=True
+    )
+    leader.start()
+    try:
+        deadline = time.monotonic() + 5
+        while (
+            key not in Authorizer._server_type_flights and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        assert key in Authorizer._server_type_flights, "leader never registered"
+        waiter.start()
+        assert joined.wait(timeout=5), "waiter never joined the leader's flight"
+        Authorizer.clear_server_type_cache()  # retires the leader's flight
+        assert AccessTokenAuthorizer("tok", key)._server_type == "platform"
+    finally:
+        release_leader.set()
+        join_all([t for t in (leader, waiter) if t.ident is not None])
+    assert results["leader"] == "secret_server"  # its own observation stands
+    assert results["waiter"] == "platform"  # not the stale success
 
 
 def test_waiter_on_a_superseded_flight_takes_the_current_answer(monkeypatch):
