@@ -1,3 +1,8 @@
-requests==2.34.2 # pinned to address CVE-2026-25645 (2.33.0 was never published)
-urllib3==2.7.0 # not directly required, pinned by Snyk to avoid a vulnerability
-idna==3.18 # not directly required (transitive via requests), pinned to address CVE-2026-45409
+requests==2.34.2
+tox
+pytest
+python-dotenv
+flit
+black==26.3.1
+urllib3==2.8.0 # not directly required, pinned by Snyk to avoid a vulnerability
+zipp==3.23.0 # not directly required, pinned by Snyk to avoid a vulnerability
