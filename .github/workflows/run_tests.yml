@@ -30,7 +30,7 @@ jobs:
           # requirements file cannot replace the running pip.
           python -m pip install --upgrade "pip>=26.2" # CVE-2026-8643, CVE-2026-6357, CVE-2026-13346, CVE-2026-3219
           python -m pip install tox
-          echo "server ${{secrets.TSS_PLATFORM_BASE_URL}}"
+  
       - name: Run Tox
         # Run tox using the version of Python in `PATH`
         run: tox -e py
