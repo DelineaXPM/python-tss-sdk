@@ -30,7 +30,45 @@ jobs:
           # requirements file cannot replace the running pip.
           python -m pip install --upgrade "pip>=26.2" # CVE-2026-8643, CVE-2026-6357, CVE-2026-13346, CVE-2026-3219
           python -m pip install tox
-  
+          
+      - name: Diagnose the Platform URL
+        # delinea-util can only authenticate to Platform with an OAuth client,
+        # so this checks reachability and the service type, not the password.
+        if: matrix.python == '3.12'
+        continue-on-error: true
+        run: go run github.com/DelineaXPM/delinea-tools/cmd/delinea-util@v1.0.0 check --no-auth
+        env:
+          DELINEA_TOOLS_URL: ${{ secrets.TSS_PLATFORM_BASE_URL }}
+          DELINEA_TOOLS_TARGET: platform
+
+      - name: Fingerprint the test secrets
+        # Temporary: prints length, surrounding whitespace and a 4-hex-char
+        # sha256 prefix per secret, to compare with a local .env without
+        # revealing values. Remove once the credentials are fixed.
+        if: matrix.python == '3.12'
+        continue-on-error: true
+        run: |
+          for v in TSS_USERNAME TSS_PASSWORD TSS_TENANT TSS_SECRET_ID TSS_SECRET_PATH \
+                   TSS_FOLDER_ID TSS_FOLDER_PATH TSS_PLATFORM_USERNAME \
+                   TSS_PLATFORM_PASSWORD TSS_PLATFORM_BASE_URL; do
+            val="${!v}"
+            trimmed="$(printf %s "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            ws=no; [ "$val" != "$trimmed" ] && ws=YES
+            printf '%-24s len=%-3s whitespace=%-3s sha=%s\n' "$v" "${#val}" "$ws" \
+              "$(printf %s "$val" | sha256sum | cut -c1-4)"
+          done
+        env:
+          TSS_USERNAME: ${{ secrets.TSS_USERNAME }}
+          TSS_PASSWORD: ${{ secrets.TSS_PASSWORD }}
+          TSS_TENANT: ${{ secrets.TSS_TENANT }}
+          TSS_SECRET_ID: ${{ secrets.TSS_SECRET_ID }}
+          TSS_SECRET_PATH: ${{ secrets.TSS_SECRET_PATH }}
+          TSS_FOLDER_ID: ${{ secrets.TSS_FOLDER_ID }}
+          TSS_FOLDER_PATH: ${{ secrets.TSS_FOLDER_PATH }}
+          TSS_PLATFORM_USERNAME: ${{ secrets.TSS_PLATFORM_USERNAME }}
+          TSS_PLATFORM_PASSWORD: ${{ secrets.TSS_PLATFORM_PASSWORD }}
+          TSS_PLATFORM_BASE_URL: ${{ secrets.TSS_PLATFORM_BASE_URL }}
+      
       - name: Run Tox
         # Run tox using the version of Python in `PATH`
         run: tox -e py
